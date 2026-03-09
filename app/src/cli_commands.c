@@ -50,6 +50,8 @@ static BaseType_t prvTorqueCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
                                    const char *pcCommandString);
 static BaseType_t prvStopCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
                                  const char *pcCommandString);
+static BaseType_t prvSetServoIdCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                       const char *pcCommandString);
 
 /* ── Command definitions ────────────────────────────────────────── */
 
@@ -89,6 +91,17 @@ static const CLI_Command_Definition_t xStopCommand = {
     1   /* id */
 };
 
+static const CLI_Command_Definition_t xSetServoIdCommand = {
+    "servosetid",
+    "\r\nservosetid <id> <new_servo_id>:\r\n"
+    "  Program a new bus ID into the servo at motor slot <id> (1.." STRINGIFY(MOTOR_MAX) ").\r\n"
+    "  <new_servo_id> is the new physical servo bus ID (1..253).\r\n"
+    "  Verifies the write by reading position with the new ID.\r\n"
+    "  NOTE: reboot or re-scan required for the system to use the new ID.\r\n\r\n",
+    prvSetServoIdCommand,
+    2   /* id, new_servo_id */
+};
+
 /* ── Registration ───────────────────────────────────────────────── */
 
 void CLI_RegisterAllCommands(void)
@@ -97,6 +110,7 @@ void CLI_RegisterAllCommands(void)
     FreeRTOS_CLIRegisterCommand(&xReadPosCommand);
     FreeRTOS_CLIRegisterCommand(&xTorqueCommand);
     FreeRTOS_CLIRegisterCommand(&xStopCommand);
+    FreeRTOS_CLIRegisterCommand(&xSetServoIdCommand);
 }
 
 /* ── Servo handle array (defined in servoMotor.c) ───────────────── */
@@ -255,27 +269,77 @@ static BaseType_t prvStopCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
         return pdFALSE;
     }
 
-    /* Read the current raw position, then immediately command the servo to
-     * hold that position with time_ms=0 (instantaneous). */
-    int16_t raw = 0;
-    hwservo_status_t st = HWSERVO_ReadPos_Raw(&servo[idx], &raw);
+    hwservo_status_t st = HWSERVO_MoveStop(&servo[idx]);
 
+    if (st == HWSERVO_OK) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: stopped\r\n",
+                 g_motor_configs[idx].name);
+    } else {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: stop command failed (err %d)\r\n",
+                 g_motor_configs[idx].name, (int)st);
+    }
+    return pdFALSE;
+}
+
+static BaseType_t prvSetServoIdCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                       const char *pcCommandString)
+{
+    BaseType_t xLen1 = 0, xLen2 = 0;
+    const char *pcId    = FreeRTOS_CLIGetParameter(pcCommandString, 1, &xLen1);
+    const char *pcNewId = FreeRTOS_CLIGetParameter(pcCommandString, 2, &xLen2);
+
+    if (pcId == NULL || pcNewId == NULL) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Usage: servosetid <id> <new_servo_id>\r\n");
+        return pdFALSE;
+    }
+
+    /* Resolve motor slot index (1-based → 0-based) */
+    uint8_t idx;
+    if (!prv_parse_motor_id(pcId, xLen1, &idx)) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid motor ID. Use 1..%u\r\n", (unsigned)MOTOR_MAX);
+        return pdFALSE;
+    }
+
+    /* Parse new servo bus ID */
+    long new_id_l = strtol(pcNewId, NULL, 10);
+    if (new_id_l < 1 || new_id_l > 253) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid new_servo_id %ld. Must be 1..253.\r\n", new_id_l);
+        return pdFALSE;
+    }
+    uint8_t new_servo_id = (uint8_t)new_id_l;
+
+    /* Write new ID to the servo's non-volatile memory */
+    hwservo_status_t st = HWSERVO_WriteID(&servo[idx], new_servo_id);
     if (st != HWSERVO_OK) {
         snprintf(pcWriteBuffer, xWriteBufferLen,
-                 "%s: stop failed – could not read position (err %d)\r\n",
+                 "%s: ID write failed (err %d)\r\n",
                  g_motor_configs[idx].name, (int)st);
         return pdFALSE;
     }
 
-    st = HWSERVO_MoveTimeWrite_Raw(&servo[idx], (uint16_t)raw, 0);
+    /* Verify: build a temporary handle with the new ID and read raw position */
+    hiwonder_servo_t tmp = servo[idx];   /* copy bus wiring, mutex, spec */
+    tmp.id = new_servo_id;
 
+    int16_t raw = 0;
+    st = HWSERVO_ReadPos_Raw(&tmp, &raw);
     if (st == HWSERVO_OK) {
         snprintf(pcWriteBuffer, xWriteBufferLen,
-                 "%s: stopped at raw=%d\r\n",
-                 g_motor_configs[idx].name, raw);
+                 "%s: ID %u → %u OK (verify: raw pos=%d).\r\n"
+                 "Reboot or re-scan required to use the new ID.\r\n",
+                 g_motor_configs[idx].name,
+                 (unsigned)servo[idx].id,
+                 (unsigned)new_servo_id,
+                 (int)raw);
     } else {
         snprintf(pcWriteBuffer, xWriteBufferLen,
-                 "%s: stop command failed (err %d)\r\n",
+                 "%s: ID write sent but verification FAILED (err %d).\r\n"
+                 "The servo may not have accepted the new ID.\r\n",
                  g_motor_configs[idx].name, (int)st);
     }
     return pdFALSE;

@@ -301,6 +301,20 @@ hwservo_status_t HWSERVO_MoveToAngle(hiwonder_servo_t *servo,
     return HWSERVO_MoveTimeWrite_Raw(servo, raw, time_ms);
 }
 
+hwservo_status_t HWSERVO_MoveStop(hiwonder_servo_t *servo)
+{
+    if (!servo) return HWSERVO_ERR_PARAM;
+
+    hwservo_status_t st = bus_lock(servo);
+    if (st != HWSERVO_OK) return st;
+
+    st = send_and_optional_read(servo, HWSERVO_CMD_MOVE_STOP,
+                                NULL, 0,
+                                false, NULL, 0, NULL);
+    bus_unlock(servo);
+    return st;
+}
+
 hwservo_status_t HWSERVO_EnableTorque(hiwonder_servo_t *servo, bool enable)
 {
     if (!servo) return HWSERVO_ERR_PARAM;
@@ -311,6 +325,23 @@ hwservo_status_t HWSERVO_EnableTorque(hiwonder_servo_t *servo, bool enable)
     if (st != HWSERVO_OK) return st;
 
     st = send_and_optional_read(servo, HWSERVO_CMD_LOAD_OR_UNLOAD_WRITE,
+                                prm, sizeof(prm),
+                                false, NULL, 0, NULL);
+    bus_unlock(servo);
+    return st;
+}
+
+hwservo_status_t HWSERVO_WriteID(hiwonder_servo_t *servo, uint8_t new_id)
+{
+    if (!servo)                         return HWSERVO_ERR_PARAM;
+    if (new_id == 0 || new_id == 0xFE)  return HWSERVO_ERR_PARAM;  /* broadcast reserved */
+
+    uint8_t prm[1] = { new_id };
+
+    hwservo_status_t st = bus_lock(servo);
+    if (st != HWSERVO_OK) return st;
+
+    st = send_and_optional_read(servo, HWSERVO_CMD_ID_WRITE,
                                 prm, sizeof(prm),
                                 false, NULL, 0, NULL);
     bus_unlock(servo);

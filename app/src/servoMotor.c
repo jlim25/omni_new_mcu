@@ -345,10 +345,7 @@ void servoMotorTask(void const *argument)
 
             if (cmd.stop_cmd)
             {
-                int16_t raw = 0;
-                if (HWSERVO_ReadPos_Raw(s, &raw) == HWSERVO_OK) {
-                    HWSERVO_MoveTimeWrite_Raw(s, (uint16_t)raw, 0);
-                }
+                HWSERVO_MoveStop(s);
                 LOG_DEBUG("%s: CAN stop\r\n", cfg->name);
             }
             else

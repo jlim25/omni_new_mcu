@@ -10,6 +10,8 @@ extern "C" {
 
 // Command bytes (Hiwonder Bus Servo Protocol)
 #define HWSERVO_CMD_MOVE_TIME_WRITE        0x01
+#define HWSERVO_CMD_MOVE_STOP              0x0C  // 12
+#define HWSERVO_CMD_ID_WRITE               0x0D  // 13
 #define HWSERVO_CMD_POS_READ               0x1C  // 28
 #define HWSERVO_CMD_TEMP_READ              0x1A  // 26
 #define HWSERVO_CMD_VIN_READ               0x1B  // 27
@@ -138,8 +140,26 @@ hwservo_status_t HWSERVO_MoveToAngle(hiwonder_servo_t *servo,
                                      float deg,
                                      uint16_t time_ms);
 
+/**
+ * Immediately stop the servo at its current position (CMD 0x0C).
+ * No reply is expected.
+ */
+hwservo_status_t HWSERVO_MoveStop(hiwonder_servo_t *servo);
+
 /** Enable (load) or disable (unload) servo torque. */
 hwservo_status_t HWSERVO_EnableTorque(hiwonder_servo_t *servo, bool enable);
+
+/**
+ * Write a new hardware ID to the servo's non-volatile memory.
+ *
+ * The frame is sent using the servo's current ID.  The servo's .id
+ * field in the handle is NOT modified (one-shot programming utility).
+ *
+ * @param servo   Handle of the target servo (uses its current .id).
+ * @param new_id  New bus ID to program (1..253; 254 = broadcast, invalid).
+ * @return HWSERVO_OK on success, or an error code.
+ */
+hwservo_status_t HWSERVO_WriteID(hiwonder_servo_t *servo, uint8_t new_id);
 
 /* ── Read-back commands ────────────────────────────────────────── */
 
