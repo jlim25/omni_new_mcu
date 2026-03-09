@@ -214,7 +214,7 @@ void servoMotorTask(void const *argument)
     /* ── SCANNING: boot scan ──────────────────────────────────────── */
     task_state = TASK_STATE_SCANNING;
     static const uint8_t boot_ids[MOTOR_MAX] = { 1u, 2u, 3u, 4u, 5u, 6u };
-    // motor_scan(boot_ids, MOTOR_MAX); //TODO: temporary disable this. Otherwise, program is stuck
+    motor_scan(boot_ids, MOTOR_MAX);
 
     task_state = TASK_STATE_RUNNING;
     LOG_DEBUG("Servo task started: %u motor(s) discovered\r\n", g_active_motor_count);
@@ -250,8 +250,7 @@ void servoMotorTask(void const *argument)
             if (do_reconfig) {
                 task_state = TASK_STATE_RECONFIGURING;
                 LOG_DEBUG("Reconfig requested – rescanning bus...\r\n");
-                // motor_scan(reconfig_ids, MOTOR_MAX);     // motor_scan(boot_ids, MOTOR_MAX); //TODO: temporary disable this. Otherwise, program is stuck 
-                task_state = TASK_STATE_RUNNING;
+                motor_scan(reconfig_ids, MOTOR_MAX);
             }
         }
 

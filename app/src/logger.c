@@ -12,7 +12,7 @@
 #include "stream_buffer.h"
 
 /* ── Config ────────────────────────────────────────────────────── */
-#define LOG_STREAM_BUFFER_SIZE  512   // bytes in the stream buffer
+#define LOG_STREAM_BUFFER_SIZE  1024  // bytes in the stream buffer
 #define LOG_TRIGGER_LEVEL       1     // wake task after this many bytes
 #define LOG_TX_BUF_SIZE         256   // scratch buffer for one transmission
 #define LOG_TASK_PERIOD_MS      10    // how often the task polls (ms)
@@ -80,6 +80,7 @@ void logger_log(log_level_t level, const char *fmt, ...)
     if (len >= (int)sizeof(buf))
         len = sizeof(buf) - 1;
 
-    /* Send to stream — safe to call from any task */
-    xStreamBufferSend(s_logStream, buf, len, pdMS_TO_TICKS(10));
+    /* Send to stream — non-blocking: drop the message if the buffer is full
+     * rather than stalling the calling task. */
+    xStreamBufferSend(s_logStream, buf, len, 0);
 }
