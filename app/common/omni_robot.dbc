@@ -1,0 +1,94 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: RPi MCU MCU1 MCU2 MCU3 MCU4 MCU5 MCU6
+
+BO_ 257 MCU_Status_1: 8 MCU1
+ SG_ JointAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" RPi
+ SG_ JointVoltage_mV : 16|16@1+ (1,0) [0|65535] "mV" RPi
+ SG_ JointTemp_C : 32|8@1+ (1,0) [0|127] "degC" RPi
+ SG_ TorqueEnabled : 40|1@1+ (1,0) [0|1] "" RPi
+
+BO_ 258 MCU_Status_2: 8 MCU2
+ SG_ JointAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" RPi
+ SG_ JointVoltage_mV : 16|16@1+ (1,0) [0|65535] "mV" RPi
+ SG_ JointTemp_C : 32|8@1+ (1,0) [0|127] "degC" RPi
+ SG_ TorqueEnabled : 40|1@1+ (1,0) [0|1] "" RPi
+
+BO_ 259 MCU_Status_3: 8 MCU3
+ SG_ JointAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" RPi
+ SG_ JointVoltage_mV : 16|16@1+ (1,0) [0|65535] "mV" RPi
+ SG_ JointTemp_C : 32|8@1+ (1,0) [0|127] "degC" RPi
+ SG_ TorqueEnabled : 40|1@1+ (1,0) [0|1] "" RPi
+
+BO_ 260 MCU_Status_4: 8 MCU4
+ SG_ JointAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" RPi
+ SG_ JointVoltage_mV : 16|16@1+ (1,0) [0|65535] "mV" RPi
+ SG_ JointTemp_C : 32|8@1+ (1,0) [0|127] "degC" RPi
+ SG_ TorqueEnabled : 40|1@1+ (1,0) [0|1] "" RPi
+
+BO_ 261 MCU_Status_5: 8 MCU5
+ SG_ JointAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" RPi
+ SG_ JointVoltage_mV : 16|16@1+ (1,0) [0|65535] "mV" RPi
+ SG_ JointTemp_C : 32|8@1+ (1,0) [0|127] "degC" RPi
+ SG_ TorqueEnabled : 40|1@1+ (1,0) [0|1] "" RPi
+
+BO_ 262 MCU_Status_6: 8 MCU6
+ SG_ JointAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" RPi
+ SG_ JointVoltage_mV : 16|16@1+ (1,0) [0|65535] "mV" RPi
+ SG_ JointTemp_C : 32|8@1+ (1,0) [0|127] "degC" RPi
+ SG_ TorqueEnabled : 40|1@1+ (1,0) [0|1] "" RPi
+
+BO_ 513 RPi_Command_1: 8 RPi
+ SG_ TargetAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" MCU1
+ SG_ MoveDuration_ms : 16|16@1+ (1,0) [0|65535] "ms" MCU1
+ SG_ TorqueEnable : 32|1@1+ (1,0) [0|1] "" MCU1
+ SG_ StopCmd : 33|1@1+ (1,0) [0|1] "" MCU1
+
+BO_ 514 RPi_Command_2: 8 RPi
+ SG_ TargetAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" MCU2
+ SG_ MoveDuration_ms : 16|16@1+ (1,0) [0|65535] "ms" MCU2
+ SG_ TorqueEnable : 32|1@1+ (1,0) [0|1] "" MCU2
+ SG_ StopCmd : 33|1@1+ (1,0) [0|1] "" MCU2
+
+BO_ 515 RPi_Command_3: 8 RPi
+ SG_ TargetAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" MCU3
+ SG_ MoveDuration_ms : 16|16@1+ (1,0) [0|65535] "ms" MCU3
+ SG_ TorqueEnable : 32|1@1+ (1,0) [0|1] "" MCU3
+ SG_ StopCmd : 33|1@1+ (1,0) [0|1] "" MCU3
+
+BO_ 516 RPi_Command_4: 8 RPi
+ SG_ TargetAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" MCU4
+ SG_ MoveDuration_ms : 16|16@1+ (1,0) [0|65535] "ms" MCU4
+ SG_ TorqueEnable : 32|1@1+ (1,0) [0|1] "" MCU4
+ SG_ StopCmd : 33|1@1+ (1,0) [0|1] "" MCU4
+BO_ 517 RPi_Command_5: 8 RPi
+ SG_ TargetAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" MCU5
+ SG_ MoveDuration_ms : 16|16@1+ (1,0) [0|65535] "ms" MCU5
+ SG_ TorqueEnable : 32|1@1+ (1,0) [0|1] "" MCU5
+ SG_ StopCmd : 33|1@1+ (1,0) [0|1] "" MCU5
+
+BO_ 518 RPi_Command_6: 8 RPi
+ SG_ TargetAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" MCU6
+ SG_ MoveDuration_ms : 16|16@1+ (1,0) [0|65535] "ms" MCU6
+ SG_ TorqueEnable : 32|1@1+ (1,0) [0|1] "" MCU6
+ SG_ StopCmd : 33|1@1+ (1,0) [0|1] "" MCU6
+
+BO_ 768 RPi_Reconfig: 6 RPi
+ SG_ ServoId_1 : 0|8@1+ (1,0) [0|6] "" MCU
+ SG_ ServoId_2 : 8|8@1+ (1,0) [0|6] "" MCU
+ SG_ ServoId_3 : 16|8@1+ (1,0) [0|6] "" MCU
+ SG_ ServoId_4 : 24|8@1+ (1,0) [0|6] "" MCU
+ SG_ ServoId_5 : 32|8@1+ (1,0) [0|6] "" MCU
+ SG_ ServoId_6 : 40|8@1+ (1,0) [0|6] "" MCU
+
+BO_ 271 MCU_Fault: 4 MCU
+ SG_ MotorId : 0|8@1+ (1,0) [0|6] "" RPi
+ SG_ FaultCode : 8|8@1+ (1,0) [0|4] "" RPi
+ SG_ FaultValue : 16|16@1+ (1,0) [0|65535] "" RPi
+
+BO_ 769 RPi_FaultClear: 1 RPi
+ SG_ MotorId : 0|8@1+ (1,0) [0|6] "" MCU
