@@ -301,7 +301,7 @@ void servoMotorTask(void const *argument)
             const motor_config_t *cfg = &g_motor_configs[test_motor];
             hiwonder_servo_t     *s   = &servo[test_motor];
 
-            HWSERVO_MoveToAngle(s, test_deg[test_motor], 1000);
+            // HWSERVO_MoveToAngle(s, test_deg[test_motor], 1000);
             vTaskDelay(pdMS_TO_TICKS(1500));
 
             int16_t actual_raw = 0;

@@ -14,7 +14,8 @@
 
 /* MOTOR UART */
 #define SERVO_UART &huart1
+
 #define SERVO_DIR_GPIO_Port GPIOB
-#define SERVO_DIR_Pin GPIO_PIN_4
+#define SERVO_DIR_Pin GPIO_PIN_5
 
 #endif /* __BSP_H */
