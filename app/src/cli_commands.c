@@ -52,6 +52,12 @@ static BaseType_t prvStopCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
                                  const char *pcCommandString);
 static BaseType_t prvSetServoIdCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
                                        const char *pcCommandString);
+static BaseType_t prvReadAngleCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                      const char *pcCommandString);
+static BaseType_t prvReadAngleLimitsCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                             const char *pcCommandString);
+static BaseType_t prvWriteAngleLimitsCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                              const char *pcCommandString);
 
 /* ── Command definitions ────────────────────────────────────────── */
 
@@ -102,12 +108,41 @@ static const CLI_Command_Definition_t xSetServoIdCommand = {
     2   /* id, new_servo_id */
 };
 
+static const CLI_Command_Definition_t xReadAngleCommand = {
+    "readangle",
+    "\r\nreadangle <id>:\r\n"
+    "  Read the current angle (degrees) of servo <id> (1.." STRINGIFY(MOTOR_MAX) ").\r\n\r\n",
+    prvReadAngleCommand,
+    1   /* id */
+};
+
+static const CLI_Command_Definition_t xReadAngleLimitsCommand = {
+    "readanglelim",
+    "\r\nreadanglelim <id>:\r\n"
+    "  Read the min/max angle limits (raw and degrees) of servo <id> (1.." STRINGIFY(MOTOR_MAX) ").\r\n\r\n",
+    prvReadAngleLimitsCommand,
+    1   /* id */
+};
+
+static const CLI_Command_Definition_t xWriteAngleLimitsCommand = {
+    "writeanglelim",
+    "\r\nwriteanglelim <id> <min_deg> <max_deg>:\r\n"
+    "  Set the hardware angle limits on servo <id> (1.." STRINGIFY(MOTOR_MAX) ").\r\n"
+    "  <min_deg> and <max_deg> are in degrees (e.g. 0.0 240.0).\r\n"
+    "  Limits are stored in the servo's non-volatile memory.\r\n\r\n",
+    prvWriteAngleLimitsCommand,
+    3   /* id, min_deg, max_deg */
+};
+
 /* ── Registration ───────────────────────────────────────────────── */
 
 void CLI_RegisterAllCommands(void)
 {
     FreeRTOS_CLIRegisterCommand(&xMoveAngleCommand);
     FreeRTOS_CLIRegisterCommand(&xReadPosCommand);
+    FreeRTOS_CLIRegisterCommand(&xReadAngleCommand);
+    FreeRTOS_CLIRegisterCommand(&xReadAngleLimitsCommand);
+    FreeRTOS_CLIRegisterCommand(&xWriteAngleLimitsCommand);
     FreeRTOS_CLIRegisterCommand(&xTorqueCommand);
     FreeRTOS_CLIRegisterCommand(&xStopCommand);
     FreeRTOS_CLIRegisterCommand(&xSetServoIdCommand);
@@ -340,6 +375,119 @@ static BaseType_t prvSetServoIdCommand(char *pcWriteBuffer, size_t xWriteBufferL
         snprintf(pcWriteBuffer, xWriteBufferLen,
                  "%s: ID write sent but verification FAILED (err %d).\r\n"
                  "The servo may not have accepted the new ID.\r\n",
+                 g_motor_configs[idx].name, (int)st);
+    }
+    return pdFALSE;
+}
+
+static BaseType_t prvReadAngleLimitsCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                             const char *pcCommandString)
+{
+    BaseType_t xLen1 = 0;
+    const char *pcId = FreeRTOS_CLIGetParameter(pcCommandString, 1, &xLen1);
+
+    if (pcId == NULL) {
+        snprintf(pcWriteBuffer, xWriteBufferLen, "Usage: readanglelim <id>\r\n");
+        return pdFALSE;
+    }
+
+    uint8_t idx;
+    if (!prv_parse_motor_id(pcId, xLen1, &idx)) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid motor ID. Use 1..%u\r\n", (unsigned)MOTOR_MAX);
+        return pdFALSE;
+    }
+
+    uint16_t min_raw = 0, max_raw = 0;
+    hwservo_status_t st = HWSERVO_ReadAngleLimits(&servo[idx], &min_raw, &max_raw);
+    if (st == HWSERVO_OK) {
+        float min_deg = HWSERVO_RawToDeg(&servo[idx].spec, (int16_t)min_raw);
+        float max_deg = HWSERVO_RawToDeg(&servo[idx].spec, (int16_t)max_raw);
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: limits min=%.1f deg (raw=%u)  max=%.1f deg (raw=%u)\r\n",
+                 g_motor_configs[idx].name, min_deg, min_raw, max_deg, max_raw);
+    } else {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: read angle limits failed (err %d)\r\n",
+                 g_motor_configs[idx].name, (int)st);
+    }
+    return pdFALSE;
+}
+
+static BaseType_t prvWriteAngleLimitsCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                              const char *pcCommandString)
+{
+    BaseType_t xLen1 = 0, xLen2 = 0, xLen3 = 0;
+    const char *pcId  = FreeRTOS_CLIGetParameter(pcCommandString, 1, &xLen1);
+    const char *pcMin = FreeRTOS_CLIGetParameter(pcCommandString, 2, &xLen2);
+    const char *pcMax = FreeRTOS_CLIGetParameter(pcCommandString, 3, &xLen3);
+
+    if (pcId == NULL || pcMin == NULL || pcMax == NULL) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Usage: writeanglelim <id> <min_deg> <max_deg>\r\n");
+        return pdFALSE;
+    }
+
+    uint8_t idx;
+    if (!prv_parse_motor_id(pcId, xLen1, &idx)) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid motor ID. Use 1..%u\r\n", (unsigned)MOTOR_MAX);
+        return pdFALSE;
+    }
+
+    float min_deg = strtof(pcMin, NULL);
+    float max_deg = strtof(pcMax, NULL);
+
+    uint16_t min_raw = HWSERVO_DegToRaw(&servo[idx].spec, min_deg);
+    uint16_t max_raw = HWSERVO_DegToRaw(&servo[idx].spec, max_deg);
+
+    if (min_raw >= max_raw) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid limits: min (%.1f) must be less than max (%.1f)\r\n",
+                 min_deg, max_deg);
+        return pdFALSE;
+    }
+
+    hwservo_status_t st = HWSERVO_WriteAngleLimits(&servo[idx], min_raw, max_raw);
+    if (st == HWSERVO_OK) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: angle limits set min=%.1f deg (raw=%u)  max=%.1f deg (raw=%u)\r\n",
+                 g_motor_configs[idx].name, min_deg, min_raw, max_deg, max_raw);
+    } else {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: write angle limits failed (err %d)\r\n",
+                 g_motor_configs[idx].name, (int)st);
+    }
+    return pdFALSE;
+}
+
+static BaseType_t prvReadAngleCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                      const char *pcCommandString)
+{
+    BaseType_t xLen1 = 0;
+    const char *pcId = FreeRTOS_CLIGetParameter(pcCommandString, 1, &xLen1);
+
+    if (pcId == NULL) {
+        snprintf(pcWriteBuffer, xWriteBufferLen, "Usage: readangle <id>\r\n");
+        return pdFALSE;
+    }
+
+    uint8_t idx;
+    if (!prv_parse_motor_id(pcId, xLen1, &idx)) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid motor ID. Use 1..%u\r\n", (unsigned)MOTOR_MAX);
+        return pdFALSE;
+    }
+
+    float deg = 0.0f;
+    hwservo_status_t st = HWSERVO_ReadAngle_deg(&servo[idx], &deg);
+    if (st == HWSERVO_OK) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: %.1f deg\r\n",
+                 g_motor_configs[idx].name, deg);
+    } else {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: read angle failed (err %d)\r\n",
                  g_motor_configs[idx].name, (int)st);
     }
     return pdFALSE;

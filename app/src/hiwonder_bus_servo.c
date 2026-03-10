@@ -350,6 +350,60 @@ hwservo_status_t HWSERVO_WriteID(hiwonder_servo_t *servo, uint8_t new_id)
 
 /* ── Read-back ────────────────────────────────────────────────── */
 
+hwservo_status_t HWSERVO_WriteAngleLimits(hiwonder_servo_t *servo,
+                                          uint16_t min_raw, uint16_t max_raw)
+{
+    if (!servo)            return HWSERVO_ERR_PARAM;
+    if (min_raw > 1000u)   return HWSERVO_ERR_PARAM;
+    if (max_raw > 1000u)   return HWSERVO_ERR_PARAM;
+    if (min_raw >= max_raw) return HWSERVO_ERR_PARAM;
+
+    uint8_t prm[4];
+    prm[0] = (uint8_t)(min_raw & 0xFF);
+    prm[1] = (uint8_t)((min_raw >> 8) & 0xFF);
+    prm[2] = (uint8_t)(max_raw & 0xFF);
+    prm[3] = (uint8_t)((max_raw >> 8) & 0xFF);
+
+    hwservo_status_t st = bus_lock(servo);
+    if (st != HWSERVO_OK) return st;
+
+    st = send_and_optional_read(servo, HWSERVO_CMD_ANGLE_LIMIT_WRITE,
+                                prm, sizeof(prm),
+                                false, NULL, 0, NULL);
+    bus_unlock(servo);
+    return st;
+}
+
+hwservo_status_t HWSERVO_ReadAngleLimits(hiwonder_servo_t *servo,
+                                         uint16_t *min_raw_out,
+                                         uint16_t *max_raw_out)
+{
+    if (!servo || !min_raw_out || !max_raw_out) return HWSERVO_ERR_PARAM;
+
+    uint8_t rx[HWSERVO_MAX_FRAME];
+    uint16_t rx_len = 0;
+
+    hwservo_status_t st = bus_lock(servo);
+    if (st != HWSERVO_OK) return st;
+
+    st = send_and_optional_read(servo, HWSERVO_CMD_ANGLE_LIMIT_READ,
+                                NULL, 0,
+                                true, rx, sizeof(rx), &rx_len);
+    bus_unlock(servo);
+    if (st != HWSERVO_OK) return st;
+
+    const uint8_t *params = NULL;
+    uint8_t nparams = 0;
+    st = parse_reply(rx, rx_len, servo->id, HWSERVO_CMD_ANGLE_LIMIT_READ,
+                     &params, &nparams);
+    if (st != HWSERVO_OK) return st;
+
+    if (nparams < 4) return HWSERVO_ERR_FRAME;
+    *min_raw_out = (uint16_t)(params[0] | ((uint16_t)params[1] << 8));
+    *max_raw_out = (uint16_t)(params[2] | ((uint16_t)params[3] << 8));
+    return HWSERVO_OK;
+}
+
 hwservo_status_t HWSERVO_ReadPos_Raw(hiwonder_servo_t *servo, int16_t *pos_out)
 {
     if (!servo || !pos_out) return HWSERVO_ERR_PARAM;

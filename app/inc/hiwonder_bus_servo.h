@@ -10,6 +10,8 @@ extern "C" {
 
 // Command bytes (Hiwonder Bus Servo Protocol)
 #define HWSERVO_CMD_MOVE_TIME_WRITE        0x01
+#define HWSERVO_CMD_ANGLE_LIMIT_WRITE      0x14  // 20
+#define HWSERVO_CMD_ANGLE_LIMIT_READ       0x15  // 21
 #define HWSERVO_CMD_MOVE_STOP              0x0C  // 12
 #define HWSERVO_CMD_ID_WRITE               0x0D  // 13
 #define HWSERVO_CMD_POS_READ               0x1C  // 28
@@ -148,6 +150,29 @@ hwservo_status_t HWSERVO_MoveStop(hiwonder_servo_t *servo);
 
 /** Enable (load) or disable (unload) servo torque. */
 hwservo_status_t HWSERVO_EnableTorque(hiwonder_servo_t *servo, bool enable);
+
+/**
+ * Write angle limits (min/max) to the servo's non-volatile memory.
+ * Values are clamped to HWSERVO_RAW_MIN..HWSERVO_RAW_MAX.
+ * min_raw must be less than max_raw.
+ *
+ * @param servo    Target servo handle.
+ * @param min_raw  Minimum allowed raw position (0–1000).
+ * @param max_raw  Maximum allowed raw position (0–1000).
+ */
+hwservo_status_t HWSERVO_WriteAngleLimits(hiwonder_servo_t *servo,
+                                          uint16_t min_raw, uint16_t max_raw);
+
+/**
+ * Read the current angle limits from the servo.
+ *
+ * @param servo      Target servo handle.
+ * @param min_raw_out  Receives the minimum raw position (0–1000).
+ * @param max_raw_out  Receives the maximum raw position (0–1000).
+ */
+hwservo_status_t HWSERVO_ReadAngleLimits(hiwonder_servo_t *servo,
+                                         uint16_t *min_raw_out,
+                                         uint16_t *max_raw_out);
 
 /**
  * Write a new hardware ID to the servo's non-volatile memory.
