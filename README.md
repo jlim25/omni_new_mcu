@@ -37,13 +37,20 @@ Typical workflow: I use remote SSH in VSC to develop and test on the RPI5. You c
 The [transceiver](https://www.amazon.ca/MCP2515-Module-TJA1050-Receiver-Controller/dp/B07Z45RLMG) doesn't support a Raspberry Pi out of the box because it expects 5V logic levels for SPI. On any RPI, the logic level 3v3 for the GPIO (including SPI). Thus, the transceiver board must be modified. See [instructions here](https://github.com/tolgakarakurt/CANBus-MCP2515-Raspi) to modify.
 
 ## STM32 Setup
+### Nucleo F303K8
 To power the STM32 Nucleo without the USB, we can supply 5V to the 5V pin (pin 4 on CN4 [right connector]). However, you must remove SB9 (0 ohm bridge) for it to work. SB9 holds down nRST.
+### Nucleo F767ZI
+(TO BE UPDATED)
 
-# Miscellaneous
+# Communication between RPI and STM32
+Communication between the two devices is done through a CAN bus. Examine `omni_robot.dbc` to see the existing CAN messages. The STM32 will broadcast voltage, temperature, position (degree) and if torque is enabled/disabled every 25 ms. An example of the RPI controlling a motor can be found in `test/test_motor.py`.
+
 CAN bus is configured at 500 kb/s.
 
-# Configurable Options for STM32s
+# Miscellaneous
+
+## Configurable Options for STM32s
 See `motorSelection.h` and `app_config.h`. By default, the CLI is turned off to save memory space. Given this is a 32-pin Nucleo, memory is a constraint.
 
-# Motor Specs
+## Motor Specs
 Motor specifications are defined in `hiwonder_bus_servo.h`.
