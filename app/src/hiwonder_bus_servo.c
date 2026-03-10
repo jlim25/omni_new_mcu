@@ -334,7 +334,7 @@ hwservo_status_t HWSERVO_EnableTorque(hiwonder_servo_t *servo, bool enable)
 hwservo_status_t HWSERVO_WriteID(hiwonder_servo_t *servo, uint8_t new_id)
 {
     if (!servo)                         return HWSERVO_ERR_PARAM;
-    if (new_id == 0 || new_id == 0xFE)  return HWSERVO_ERR_PARAM;  /* broadcast reserved */
+    if (new_id == 0)  return HWSERVO_ERR_PARAM;  /* 0 is invalid; 1..254 (0xFE broadcast) are allowed */
 
     uint8_t prm[1] = { new_id };
 

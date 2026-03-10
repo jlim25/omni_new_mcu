@@ -58,6 +58,8 @@ static BaseType_t prvReadAngleLimitsCommand(char *pcWriteBuffer, size_t xWriteBu
                                              const char *pcCommandString);
 static BaseType_t prvWriteAngleLimitsCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
                                               const char *pcCommandString);
+static BaseType_t prvServoRepairCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                        const char *pcCommandString);
 
 /* ── Command definitions ────────────────────────────────────────── */
 
@@ -108,6 +110,18 @@ static const CLI_Command_Definition_t xSetServoIdCommand = {
     2   /* id, new_servo_id */
 };
 
+static const CLI_Command_Definition_t xServoRepairCommand = {
+    "servorepair",
+    "\r\nservorepair <current_bus_id> <new_bus_id>:\r\n"
+    "  Reprogram a servo that has been assigned an out-of-range or wrong bus ID.\r\n"
+    "  <current_bus_id>  The ID currently on the servo (any value 1..254).\r\n"
+    "  <new_bus_id>      The desired new ID (1..254).\r\n"
+    "  Uses the same UART bus as motor slot 1.\r\n"
+    "  NOTE: reboot or re-scan required for the system to use the new ID.\r\n\r\n",
+    prvServoRepairCommand,
+    2   /* current_bus_id, new_bus_id */
+};
+
 static const CLI_Command_Definition_t xReadAngleCommand = {
     "readangle",
     "\r\nreadangle <id>:\r\n"
@@ -146,6 +160,7 @@ void CLI_RegisterAllCommands(void)
     FreeRTOS_CLIRegisterCommand(&xTorqueCommand);
     FreeRTOS_CLIRegisterCommand(&xStopCommand);
     FreeRTOS_CLIRegisterCommand(&xSetServoIdCommand);
+    FreeRTOS_CLIRegisterCommand(&xServoRepairCommand);
 }
 
 /* ── Servo handle array (defined in servoMotor.c) ───────────────── */
@@ -489,6 +504,63 @@ static BaseType_t prvReadAngleCommand(char *pcWriteBuffer, size_t xWriteBufferLe
         snprintf(pcWriteBuffer, xWriteBufferLen,
                  "%s: read angle failed (err %d)\r\n",
                  g_motor_configs[idx].name, (int)st);
+    }
+    return pdFALSE;
+}
+
+static BaseType_t prvServoRepairCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                        const char *pcCommandString)
+{
+    BaseType_t xLen1 = 0, xLen2 = 0;
+    const char *pcCurId = FreeRTOS_CLIGetParameter(pcCommandString, 1, &xLen1);
+    const char *pcNewId = FreeRTOS_CLIGetParameter(pcCommandString, 2, &xLen2);
+
+    if (pcCurId == NULL || pcNewId == NULL) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Usage: servorepair <current_bus_id> <new_bus_id>\r\n");
+        return pdFALSE;
+    }
+
+    long cur_id_l = strtol(pcCurId, NULL, 10);
+    long new_id_l = strtol(pcNewId, NULL, 10);
+
+    if (cur_id_l < 1 || cur_id_l > 254) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid current_bus_id %ld. Must be 1..254.\r\n", cur_id_l);
+        return pdFALSE;
+    }
+    if (new_id_l < 1 || new_id_l > 254) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid new_bus_id %ld. Must be 1..254.\r\n", new_id_l);
+        return pdFALSE;
+    }
+
+    /* Build a temporary handle: copy bus wiring from slot 0, override the ID */
+    hiwonder_servo_t tmp = servo[0];
+    tmp.id = (uint8_t)cur_id_l;
+
+    hwservo_status_t st = HWSERVO_WriteID(&tmp, (uint8_t)new_id_l);
+    if (st != HWSERVO_OK) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "ID write to servo %ld failed (err %d).\r\n", cur_id_l, (int)st);
+        return pdFALSE;
+    }
+
+    /* Verify: try reading position with the new ID */
+    hiwonder_servo_t verify = servo[0];
+    verify.id = (uint8_t)new_id_l;
+    int16_t raw = 0;
+    st = HWSERVO_ReadPos_Raw(&verify, &raw);
+    if (st == HWSERVO_OK) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Servo %ld → %ld OK (verify: raw pos=%d).\r\n"
+                 "Reboot or re-scan required to use the new ID.\r\n",
+                 cur_id_l, new_id_l, (int)raw);
+    } else {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "ID write sent (bus id %ld → %ld) but verification FAILED (err %d).\r\n"
+                 "The servo may not have accepted the new ID.\r\n",
+                 cur_id_l, new_id_l, (int)st);
     }
     return pdFALSE;
 }
