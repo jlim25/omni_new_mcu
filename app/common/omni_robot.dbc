@@ -65,6 +65,7 @@ BO_ 516 RPi_Command_4: 8 RPi
  SG_ MoveDuration_ms : 16|16@1+ (1,0) [0|65535] "ms" MCU4
  SG_ TorqueEnable : 32|1@1+ (1,0) [0|1] "" MCU4
  SG_ StopCmd : 33|1@1+ (1,0) [0|1] "" MCU4
+ 
 BO_ 517 RPi_Command_5: 8 RPi
  SG_ TargetAngle_deg : 0|16@1+ (0.01,0) [0|360] "deg" MCU5
  SG_ MoveDuration_ms : 16|16@1+ (1,0) [0|65535] "ms" MCU5
