@@ -107,6 +107,8 @@ void Error_Handler(void);
 #define RMII_TXD0_GPIO_Port GPIOG
 #define SW0_Pin GPIO_PIN_3
 #define SW0_GPIO_Port GPIOB
+#define MOTOR_UART_DIR_Pin GPIO_PIN_5
+#define MOTOR_UART_DIR_GPIO_Port GPIOB
 #define MOTOR_UART_Pin GPIO_PIN_6
 #define MOTOR_UART_GPIO_Port GPIOB
 #define LD2_Pin GPIO_PIN_7
