@@ -36,6 +36,7 @@
 #include "debug.h"
 #include "string.h"
 #include "stdlib.h"
+#include "cmsis_os.h"
 
 /* Stringify helper for MOTOR_MAX in command help strings */
 #define STRINGIFY_IMPL(x)  #x
@@ -60,6 +61,12 @@ static BaseType_t prvWriteAngleLimitsCommand(char *pcWriteBuffer, size_t xWriteB
                                               const char *pcCommandString);
 static BaseType_t prvServoRepairCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
                                         const char *pcCommandString);
+static BaseType_t prvReadAllCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                    const char *pcCommandString);
+static BaseType_t prvSeqMoveCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                    const char *pcCommandString);
+static BaseType_t prvReadTempCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                     const char *pcCommandString);
 
 /* ── Command definitions ────────────────────────────────────────── */
 
@@ -130,6 +137,26 @@ static const CLI_Command_Definition_t xReadAngleCommand = {
     1   /* id */
 };
 
+static const CLI_Command_Definition_t xReadAllCommand = {
+    "readall",
+    "\r\nreadall:\r\n"
+    "  Read the current position of all motors (1.." STRINGIFY(MOTOR_MAX) ").\r\n\r\n",
+    prvReadAllCommand,
+    0   /* no parameters */
+};
+
+static const CLI_Command_Definition_t xSeqMoveCommand = {
+    "seqmove",
+    "\r\nseqmove <deg1> [deg2] ... [deg" STRINGIFY(MOTOR_MAX) "]:\r\n"
+    "  Move motors sequentially, one per second.\r\n"
+    "  Motor 1 moves first, then 2, 3, etc.\r\n"
+    "  Each motor moves over 1000 ms, followed by a 1000 ms settle delay.\r\n"
+    "  Omit trailing angles to leave remaining motors in place.\r\n"
+    "  Example: seqmove 90.0 45.0 120.0\r\n\r\n",
+    prvSeqMoveCommand,
+    -1  /* variable: 1..MOTOR_MAX angles */
+};
+
 static const CLI_Command_Definition_t xReadAngleLimitsCommand = {
     "readanglelim",
     "\r\nreadanglelim <id>:\r\n"
@@ -148,6 +175,14 @@ static const CLI_Command_Definition_t xWriteAngleLimitsCommand = {
     3   /* id, min_deg, max_deg */
 };
 
+static const CLI_Command_Definition_t xReadTempCommand = {
+    "readtemp",
+    "\r\nreadtemp <id>:\r\n"
+    "  Read the internal temperature (Celsius) of servo <id> (1.." STRINGIFY(MOTOR_MAX) ").\r\n\r\n",
+    prvReadTempCommand,
+    1   /* id */
+};
+
 /* ── Registration ───────────────────────────────────────────────── */
 
 void CLI_RegisterAllCommands(void)
@@ -155,8 +190,11 @@ void CLI_RegisterAllCommands(void)
     FreeRTOS_CLIRegisterCommand(&xMoveAngleCommand);
     FreeRTOS_CLIRegisterCommand(&xReadPosCommand);
     FreeRTOS_CLIRegisterCommand(&xReadAngleCommand);
+    FreeRTOS_CLIRegisterCommand(&xReadAllCommand);
+    FreeRTOS_CLIRegisterCommand(&xSeqMoveCommand);
     FreeRTOS_CLIRegisterCommand(&xReadAngleLimitsCommand);
     FreeRTOS_CLIRegisterCommand(&xWriteAngleLimitsCommand);
+    FreeRTOS_CLIRegisterCommand(&xReadTempCommand);
     FreeRTOS_CLIRegisterCommand(&xTorqueCommand);
     FreeRTOS_CLIRegisterCommand(&xStopCommand);
     FreeRTOS_CLIRegisterCommand(&xSetServoIdCommand);
@@ -508,6 +546,33 @@ static BaseType_t prvReadAngleCommand(char *pcWriteBuffer, size_t xWriteBufferLe
     return pdFALSE;
 }
 
+static BaseType_t prvReadAllCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                    const char *pcCommandString)
+{
+    (void)pcCommandString;
+
+    size_t offset = 0;
+    for (uint8_t i = 0; i < MOTOR_MAX; i++) {
+        float deg = 0.0f;
+        int16_t raw = 0;
+        hwservo_status_t st = HWSERVO_ReadAngle_deg(&servo[i], &deg);
+        if (st == HWSERVO_OK) {
+            HWSERVO_ReadPos_Raw(&servo[i], &raw);
+            offset += (size_t)snprintf(pcWriteBuffer + offset,
+                                       xWriteBufferLen - offset,
+                                       "%s: %.1f deg (raw=%d)\r\n",
+                                       g_motor_configs[i].name, deg, raw);
+        } else {
+            offset += (size_t)snprintf(pcWriteBuffer + offset,
+                                       xWriteBufferLen - offset,
+                                       "%s: read failed (err %d)\r\n",
+                                       g_motor_configs[i].name, (int)st);
+        }
+        if (offset >= xWriteBufferLen - 1u) break;
+    }
+    return pdFALSE;
+}
+
 static BaseType_t prvServoRepairCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
                                         const char *pcCommandString)
 {
@@ -561,6 +626,85 @@ static BaseType_t prvServoRepairCommand(char *pcWriteBuffer, size_t xWriteBuffer
                  "ID write sent (bus id %ld → %ld) but verification FAILED (err %d).\r\n"
                  "The servo may not have accepted the new ID.\r\n",
                  cur_id_l, new_id_l, (int)st);
+    }
+    return pdFALSE;
+}
+
+static BaseType_t prvSeqMoveCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                    const char *pcCommandString)
+{
+    /* Collect all degree arguments upfront (up to MOTOR_MAX) */
+    float    degrees[MOTOR_MAX];
+    bool     has_arg[MOTOR_MAX];
+    uint8_t  n = 0;
+
+    for (uint8_t i = 0; i < MOTOR_MAX; i++) {
+        BaseType_t xLen = 0;
+        const char *pcArg = FreeRTOS_CLIGetParameter(pcCommandString,
+                                                     (UBaseType_t)(i + 1u),
+                                                     &xLen);
+        if (pcArg == NULL) {
+            has_arg[i] = false;
+        } else {
+            has_arg[i] = true;
+            degrees[i] = strtof(pcArg, NULL);
+            n++;
+        }
+    }
+
+    if (n == 0) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Usage: seqmove <deg1> [deg2] ... [deg%u]\r\n", (unsigned)MOTOR_MAX);
+        return pdFALSE;
+    }
+
+    size_t offset = 0;
+    for (uint8_t i = 0; i < MOTOR_MAX; i++) {
+        if (!has_arg[i]) continue;
+
+        hwservo_status_t st = HWSERVO_MoveToAngle(&servo[i], degrees[i], 1000u);
+        offset += (size_t)snprintf(pcWriteBuffer + offset,
+                                   xWriteBufferLen - offset,
+                                   "%s: moving to %.1f deg%s\r\n",
+                                   g_motor_configs[i].name,
+                                   degrees[i],
+                                   st == HWSERVO_OK ? "" : " (FAILED)");
+
+        /* Wait 1 s for the movement to complete before commanding the next motor */
+        osDelay(1000u);
+    }
+
+    return pdFALSE;
+}
+
+static BaseType_t prvReadTempCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
+                                     const char *pcCommandString)
+{
+    BaseType_t xLen1 = 0;
+    const char *pcId = FreeRTOS_CLIGetParameter(pcCommandString, 1, &xLen1);
+
+    if (pcId == NULL) {
+        snprintf(pcWriteBuffer, xWriteBufferLen, "Usage: readtemp <id>\r\n");
+        return pdFALSE;
+    }
+
+    uint8_t idx;
+    if (!prv_parse_motor_id(pcId, xLen1, &idx)) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "Invalid motor ID. Use 1..%u\r\n", (unsigned)MOTOR_MAX);
+        return pdFALSE;
+    }
+
+    uint8_t tempC = 0;
+    hwservo_status_t st = HWSERVO_ReadTemp_C(&servo[idx], &tempC);
+    if (st == HWSERVO_OK) {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: %u C\r\n",
+                 g_motor_configs[idx].name, (unsigned)tempC);
+    } else {
+        snprintf(pcWriteBuffer, xWriteBufferLen,
+                 "%s: read temp failed (err %d)\r\n",
+                 g_motor_configs[idx].name, (int)st);
     }
     return pdFALSE;
 }
