@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-# JOINT CONTROL GUI - Individual joint angle control for 6-DOF arm
-# Companion to armControl.py (pose-based control)
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 import sys
@@ -11,241 +9,435 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STEP = 0.05
 
-# Joint angle limits (radians)
-JOINT_LIMITS = [
-    (-3.14, 3.14),   # q1
-    (-1.57, 1.57),   # q2
-    (-1.57, 1.57),   # q3
-    (-3.14, 3.14),   # q4
-    (-3.14, 3.14),   # q5
-    (-3.14, 3.14),   # q6
+MODULE_TYPES = {
+    "none": {
+        "joint_kind": "N",
+        "alpha": 0.0,
+        "theta_offset": 0.0,
+        "default_limits": (0.0, 0.0),
+    },
+    "swivel": {
+        "joint_kind": "R",
+        "alpha": 0.0,
+        "theta_offset": 0.0,
+        "default_limits": (-3.14, 3.14),
+    },
+    "rotation": {
+        "joint_kind": "R",
+        "alpha": -math.pi / 2,
+        "theta_offset": -math.pi / 2,
+        "default_limits": (-1.57, 1.57),
+    }
+}
+
+ROBOT_CONFIG = [
+    {"name": "J1", "type": "swivel",   "a": 0.0,    "d": 0.75,  "q": 0.0},
+    {"name": "J2", "type": "rotation", "a": 0.35,   "d": 0.0,   "q": 0.0},
+    {"name": "J3", "type": "rotation", "a": 1.25,   "d": 0.0,   "q": 0.0},
+    {"name": "J4", "type": "rotation", "a": -0.054, "d": 1.5,   "q": 0.0},
+    {"name": "J5", "type": "none",     "a": 0.0,    "d": 0.0,   "q": 0.0},
+    {"name": "J6", "type": "none",     "a": 0.0,    "d": 0.0,   "q": 0.0},
+    {"name": "GRIP", "type": "swivel", "a": 0.0,    "d": 0.303, "q": 0.0, "fixed": True},
 ]
 
-STEP = 0.05  # radians per button press
-
-# ========== FORWARD KINEMATICS (matches invKin-3.py DH) ==========
+def build_modules(config):
+    modules = []
+    for item in config:
+        meta = MODULE_TYPES[item["type"]]
+        modules.append({
+            "name": item["name"],
+            "type": item["type"],
+            "joint_kind": meta["joint_kind"],
+            "alpha": float(item.get("alpha", meta["alpha"])),
+            "theta_offset": float(item.get("theta_offset", meta["theta_offset"])),
+            "a": float(item.get("a", 0.0)),
+            "d": float(item.get("d", 0.0)),
+            "q": float(item.get("q", 0.0)),
+            "qlim": item.get("qlim", meta["default_limits"]),
+            "fixed": bool(item.get("fixed", False)),
+        })
+    return modules
 
 def pose(theta, alpha, a, d):
     c, s = math.cos(theta), math.sin(theta)
     ca, sa = math.cos(alpha), math.sin(alpha)
     return np.array([
-        [c,  -s,   0,   a],
+        [c,   -s,   0,   a],
         [s*ca, c*ca, -sa, -d*sa],
         [s*sa, c*sa,  ca,  d*ca],
         [0,    0,    0,   1]
-    ])
+    ], dtype=float)
 
-def forward_kin(q1, q2, q3, q4, q5, q6):
-    d90 = math.pi / 2
-    transforms = [
-        pose(q1,       0,    0,     0.75),
-        pose(q2 - d90, -d90, 0.35,  0),
-        pose(q3,       0,    1.25,  0),
-        pose(q4,       -d90, -0.054,1.5),
-        pose(q5,       d90,  0,     0),
-        pose(q6,       -d90, 0,     0),
-        pose(0,        0,    0,     0.303),
-    ]
-    X, Y, Z = [], [], []
+def forward_kin(modules):
     T = np.eye(4)
-    for Ti in transforms:
-        T = T @ Ti
-        X.append(T[0, 3])
-        Y.append(T[1, 3])
-        Z.append(T[2, 3])
-    return np.array(X), np.array(Y), np.array(Z)
+    pts = [(0.0, 0.0, 0.0)]
+
+    for m in modules:
+        if m["type"] == "none":
+            pts.append((T[0, 3], T[1, 3], T[2, 3]))
+            continue
+
+        theta = m["theta_offset"] + (0.0 if m["fixed"] else m["q"])
+        T = T @ pose(theta, m["alpha"], m["a"], m["d"])
+        pts.append((T[0, 3], T[1, 3], T[2, 3]))
+
+    X = np.array([p[0] for p in pts], dtype=float)
+    Y = np.array([p[1] for p in pts], dtype=float)
+    Z = np.array([p[2] for p in pts], dtype=float)
+    return X, Y, Z
 
 def create_plot():
-    fig = plt.figure(figsize=(7, 6))
+    fig = plt.figure(figsize=(7, 5))
     ax = fig.add_subplot(111, projection='3d')
-    ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)'); ax.set_zlabel('Z (m)')
-    ax.set_xlim([-0.5, 2]); ax.set_ylim([-1.5, 1.5]); ax.set_zlim([0, 3.5])
+    ax.set_xlabel('X (m)')
+    ax.set_ylabel('Y (m)')
+    ax.set_zlabel('Z (m)')
+    ax.set_xlim([-2, 2])
+    ax.set_ylim([-2, 2])
+    ax.set_zlim([0, 3])
     ax.set_autoscale_on(False)
     return fig, ax
-
-# ========== GUI ==========
-
-class JointControlUI(object):
-
-    JOINT_NAMES = ['q1', 'q2', 'q3', 'q4', 'q5', 'q6']
-    INIT_VALS   = [0.0,  0.0,  0.0,  0.0,  0.0,  0.0]
-
-    def setupUi(self, win):
-        win.setWindowTitle('Joint Control')
-        win.resize(460, 480)
-
-        icon_up   = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, 'up.png')))
-        icon_down = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, 'down.png')))
-
-        self.val_labels  = []
-        self.up_buttons  = []
-        self.down_buttons = []
-
-        # Title
-        title = QtWidgets.QLabel('Joint Control', win)
-        title.setGeometry(QtCore.QRect(220, 10, 200, 40))
-        font = QtGui.QFont('Roboto Slab', 20)
-        title.setFont(font)
-
-        subtitle = QtWidgets.QLabel('OMNI Robot', win)
-        subtitle.setGeometry(QtCore.QRect(10, 10, 200, 40))
-        subtitle.setFont(QtGui.QFont('Roboto Slab', 20))
-        subtitle.setAlignment(QtCore.Qt.AlignRight)
-
-        base_y = 70
-        row_h  = 55
-
-        for i, (name, init) in enumerate(zip(self.JOINT_NAMES, self.INIT_VALS)):
-            y = base_y + i * row_h
-
-            # Joint label
-            lbl = QtWidgets.QLabel(name.upper(), win)
-            lbl.setGeometry(QtCore.QRect(20, y, 60, 40))
-            lbl.setFont(QtGui.QFont('Roboto Slab', 12))
-            lbl.setStyleSheet('background-color: rgb(237,255,248)')
-            lbl.setFrameShape(QtWidgets.QFrame.Panel)
-            lbl.setFrameShadow(QtWidgets.QFrame.Raised)
-            lbl.setAlignment(QtCore.Qt.AlignCenter)
-
-            # Down button
-            btn_down = QtWidgets.QPushButton('', win)
-            btn_down.setGeometry(QtCore.QRect(100, y, 40, 40))
-            btn_down.setIcon(icon_down)
-            btn_down.setIconSize(QtCore.QSize(30, 30))
-            btn_down.setFlat(True)
-            btn_down.setStyleSheet('background-color: transparent;')
-
-            # Value display
-            val_lbl = QtWidgets.QLabel(f'{init:.2f}', win)
-            val_lbl.setGeometry(QtCore.QRect(150, y, 80, 40))
-            val_lbl.setFont(QtGui.QFont('Roboto Slab', 13))
-            val_lbl.setFrameShape(QtWidgets.QFrame.Box)
-            val_lbl.setFrameShadow(QtWidgets.QFrame.Raised)
-            val_lbl.setLineWidth(1)
-            val_lbl.setAlignment(QtCore.Qt.AlignCenter)
-
-            # Up button
-            btn_up = QtWidgets.QPushButton('', win)
-            btn_up.setGeometry(QtCore.QRect(240, y, 40, 40))
-            btn_up.setIcon(icon_up)
-            btn_up.setIconSize(QtCore.QSize(30, 30))
-            btn_up.setFlat(True)
-            btn_up.setStyleSheet('background-color: transparent;')
-
-            # Angle in degrees display (read-only info)
-            deg_lbl = QtWidgets.QLabel(f'({math.degrees(init):.1f}°)', win)
-            deg_lbl.setGeometry(QtCore.QRect(295, y, 100, 40))
-            deg_lbl.setFont(QtGui.QFont('Roboto Slab', 10))
-            deg_lbl.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            deg_lbl.setObjectName(f'deg_{i}')
-
-            self.val_labels.append(val_lbl)
-            self.up_buttons.append(btn_up)
-            self.down_buttons.append(btn_down)
-
-            # Connect with closure
-            btn_up.clicked.connect(lambda _, idx=i: self.increment(idx))
-            btn_down.clicked.connect(lambda _, idx=i: self.decrement(idx))
-
-        # Send button
-        self.sendBtn = QtWidgets.QPushButton('SEND', win)
-        self.sendBtn.setGeometry(QtCore.QRect(20, 400, 120, 40))
-        self.sendBtn.setFont(QtGui.QFont('Roboto Slab', 12))
-        self.sendBtn.setStyleSheet(
-            'background-color: rgb(50,180,100); color: white; border-radius: 6px;')
-        self.sendBtn.clicked.connect(self.send)
-
-        # Reset button
-        self.resetBtn = QtWidgets.QPushButton('RESET', win)
-        self.resetBtn.setGeometry(QtCore.QRect(155, 400, 120, 40))
-        self.resetBtn.setFont(QtGui.QFont('Roboto Slab', 12))
-        self.resetBtn.setStyleSheet(
-            'background-color: rgb(200,80,60); color: white; border-radius: 6px;')
-        self.resetBtn.clicked.connect(self.reset)
-
-        self.window = win
-        self.plot_data()
-
-    def get_angles(self):
-        return [float(lbl.text()) for lbl in self.val_labels]
-
-    def increment(self, idx):
-        val = float(self.val_labels[idx].text())
-        lo, hi = JOINT_LIMITS[idx]
-        val = min(hi, round(val + STEP, 3))
-        self.val_labels[idx].setText(f'{val:.2f}')
-        self._update_deg(idx, val)
-        self.plot_data()
-
-    def decrement(self, idx):
-        val = float(self.val_labels[idx].text())
-        lo, hi = JOINT_LIMITS[idx]
-        val = max(lo, round(val - STEP, 3))
-        self.val_labels[idx].setText(f'{val:.2f}')
-        self._update_deg(idx, val)
-        self.plot_data()
-
-    def reset(self):
-        for i, init in enumerate(self.INIT_VALS):
-            self.val_labels[i].setText(f'{init:.2f}')
-            self._update_deg(i, init)
-        self.plot_data()
-
-    def _update_deg(self, idx, val_rad):
-        deg_lbl = self.window.findChild(QtWidgets.QLabel, f'deg_{idx}')
-        if deg_lbl:
-            deg_lbl.setText(f'({math.degrees(val_rad):.1f}°)')
-
-    def send(self):
-        try:
-            angles = self.get_angles()
-            dataString = ','.join(f'{a:.3f}' for a in angles)
-            print(f'SEND: {dataString}')
-            # Uncomment to transmit over serial:
-            # self.window.SerialObj.sendString(dataString)
-        except Exception as e:
-            print(f'Send error: {e}')
-
-    def plot_data(self):
-        try:
-            q1, q2, q3, q4, q5, q6 = self.get_angles()
-            X, Y, Z = forward_kin(q1, q2, q3, q4, q5, q6)
-            if hasattr(self.window, 'ax'):
-                ax = self.window.ax
-                ax.cla()
-                ax.plot(X, Y, Z, 'b-o', linewidth=2, markersize=6, label='Arm')
-                ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='r', s=100, label='End-effector')
-                ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)'); ax.set_zlabel('Z (m)')
-                ax.set_xlim([-0.5, 2]); ax.set_ylim([-1.5, 1.5]); ax.set_zlim([0, 3.5])
-                ax.legend()
-                self.window.fig.canvas.draw()
-        except Exception as e:
-            print(f'Plot error: {e}')
-
-
-# ========== MAIN WINDOW ==========
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.fig, self.ax = create_plot()
         plt.ion()
-        # Uncomment for serial:
-        # from SerialCom import SerialCom
-        # self.SerialObj = SerialCom()
-        # self.SerialObj.getConn('COM9', 9600)
 
+class ModularJointUI(object):
+    def setupUi(self, win):
+        self.window = win
+        self.modules = build_modules(ROBOT_CONFIG)
+        self.control_rows = []
+        self.config_rows = []
+
+        win.setWindowTitle("Modular Joint Control")
+        win.resize(1000, 620)
+
+        central = QtWidgets.QWidget()
+        win.setCentralWidget(central)
+        root = QtWidgets.QVBoxLayout(central)
+
+        title = QtWidgets.QLabel("Modular Joint Control")
+        title.setFont(QtGui.QFont("Roboto Slab", 18))
+        root.addWidget(title)
+
+        self.tabs = QtWidgets.QTabWidget()
+        root.addWidget(self.tabs)
+
+        self.icon_up = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, "up.png")))
+        self.icon_down = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, "down.png")))
+
+        self.build_control_tab()
+        self.build_config_tab()
+
+        self.plot_data()
+
+    def build_control_tab(self):
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(tab)
+
+        left_panel = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left_panel)
+
+        subtitle = QtWidgets.QLabel("Joint angles")
+        subtitle.setFont(QtGui.QFont("Roboto Slab", 12))
+        left_layout.addWidget(subtitle)
+
+        grid_wrap = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(grid_wrap)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        headers = ["Joint", "Type", "Down", "Angle (rad)", "Up", "Angle (deg)"]
+        for c, text in enumerate(headers):
+            lbl = QtWidgets.QLabel(text)
+            lbl.setFont(QtGui.QFont("Roboto Slab", 10))
+            grid.addWidget(lbl, 0, c)
+
+        for i, m in enumerate(self.modules, start=1):
+            name_lbl = QtWidgets.QLabel(m["name"])
+            type_lbl = QtWidgets.QLabel(m["type"])
+
+            down_btn = QtWidgets.QPushButton()
+            down_btn.setIcon(self.icon_down)
+            down_btn.setIconSize(QtCore.QSize(28, 28))
+            down_btn.setFixedSize(40, 40)
+
+            angle_lbl = QtWidgets.QLabel()
+            angle_lbl.setFrameShape(QtWidgets.QFrame.Box)
+            angle_lbl.setAlignment(QtCore.Qt.AlignCenter)
+            angle_lbl.setMinimumWidth(90)
+            angle_lbl.setMinimumHeight(36)
+
+            up_btn = QtWidgets.QPushButton()
+            up_btn.setIcon(self.icon_up)
+            up_btn.setIconSize(QtCore.QSize(28, 28))
+            up_btn.setFixedSize(40, 40)
+
+            deg_lbl = QtWidgets.QLabel()
+            deg_lbl.setAlignment(QtCore.Qt.AlignCenter)
+            deg_lbl.setMinimumWidth(80)
+
+            if not m["fixed"]:
+                down_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, -STEP))
+                up_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, STEP))
+            else:
+                down_btn.setEnabled(False)
+                up_btn.setEnabled(False)
+
+            widgets = [name_lbl, type_lbl, down_btn, angle_lbl, up_btn, deg_lbl]
+            for c, w in enumerate(widgets):
+                grid.addWidget(w, i, c)
+
+            self.control_rows.append({
+                "type_lbl": type_lbl,
+                "down_btn": down_btn,
+                "angle_lbl": angle_lbl,
+                "up_btn": up_btn,
+                "deg_lbl": deg_lbl,
+                "name_lbl": name_lbl,
+            })
+
+        left_layout.addWidget(grid_wrap)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.resetBtn = QtWidgets.QPushButton("Reset angles")
+        self.resetBtn.clicked.connect(self.reset_angles)
+        btn_row.addWidget(self.resetBtn)
+
+        self.sendBtn = QtWidgets.QPushButton("Send")
+        self.sendBtn.clicked.connect(self.send)
+        btn_row.addWidget(self.sendBtn)
+
+        btn_row.addStretch()
+        left_layout.addLayout(btn_row)
+
+        note = QtWidgets.QLabel(
+            "Use Configure Robot to change module type, link lengths, and limits."
+        )
+        note.setWordWrap(True)
+        left_layout.addWidget(note)
+
+        layout.addWidget(left_panel, 3)
+
+        right_panel = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_panel)
+        plot_info = QtWidgets.QLabel(
+            "Live arm preview\n"
+            "Blue line: links\n"
+            "Red point: end-effector\n"
+            "Rows marked 'unused' are skipped in the chain"
+        )
+        plot_info.setAlignment(QtCore.Qt.AlignTop)
+        right_layout.addWidget(plot_info)
+        layout.addWidget(right_panel, 2)
+
+        self.tabs.addTab(tab, "Control")
+        self.refresh_all_control_rows()
+
+    def build_config_tab(self):
+        tab = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(tab)
+
+        help_lbl = QtWidgets.QLabel(
+            "Edit module type, link lengths, and joint limits below, then click Apply geometry."
+        )
+        help_lbl.setWordWrap(True)
+        outer.addWidget(help_lbl)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        content = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(content)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        headers = ["Joint", "Type", "a", "d", "Min", "Max"]
+        for c, text in enumerate(headers):
+            lbl = QtWidgets.QLabel(text)
+            lbl.setFont(QtGui.QFont("Roboto Slab", 10))
+            grid.addWidget(lbl, 0, c)
+
+        for i, m in enumerate(self.modules, start=1):
+            name_lbl = QtWidgets.QLabel(m["name"])
+
+            type_box = QtWidgets.QComboBox()
+            type_box.addItems(["none", "swivel", "rotation"])
+            type_box.setCurrentText(m["type"])
+
+            a_edit = QtWidgets.QLineEdit(str(m["a"]))
+            d_edit = QtWidgets.QLineEdit(str(m["d"]))
+            qmin_edit = QtWidgets.QLineEdit("" if m["fixed"] else str(m["qlim"][0]))
+            qmax_edit = QtWidgets.QLineEdit("" if m["fixed"] else str(m["qlim"][1]))
+
+            if m["fixed"]:
+                type_box.setEnabled(False)
+                qmin_edit.setEnabled(False)
+                qmax_edit.setEnabled(False)
+
+            widgets = [name_lbl, type_box, a_edit, d_edit, qmin_edit, qmax_edit]
+            for c, w in enumerate(widgets):
+                grid.addWidget(w, i, c)
+
+            row_info = {
+                "type_box": type_box,
+                "a_edit": a_edit,
+                "d_edit": d_edit,
+                "qmin_edit": qmin_edit,
+                "qmax_edit": qmax_edit,
+            }
+            self.config_rows.append(row_info)
+
+            if not m["fixed"]:
+                type_box.currentTextChanged.connect(lambda _, idx=i-1: self.update_config_row_state(idx))
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.applyBtn = QtWidgets.QPushButton("Apply geometry")
+        self.applyBtn.clicked.connect(self.apply_geometry)
+        btn_row.addWidget(self.applyBtn)
+        btn_row.addStretch()
+        outer.addLayout(btn_row)
+
+        self.tabs.addTab(tab, "Configure Robot")
+
+        for i, m in enumerate(self.modules):
+            if not m["fixed"]:
+                self.update_config_row_state(i)
+
+    def update_config_row_state(self, idx):
+        m = self.modules[idx]
+        row = self.config_rows[idx]
+        current_type = row["type_box"].currentText()
+
+        is_none = (current_type == "none")
+
+        row["qmin_edit"].setEnabled(not is_none)
+        row["qmax_edit"].setEnabled(not is_none)
+
+        if is_none:
+            row["qmin_edit"].setText("0.0")
+            row["qmax_edit"].setText("0.0")
+
+    def change_angle(self, idx, delta):
+        m = self.modules[idx]
+        if m["fixed"] or m["type"] == "none":
+            return
+        qmin, qmax = m["qlim"]
+        m["q"] = max(qmin, min(qmax, round(m["q"] + delta, 3)))
+        self.refresh_control_row(idx)
+        self.plot_data()
+
+    def refresh_control_row(self, idx):
+        m = self.modules[idx]
+        row = self.control_rows[idx]
+
+        row["type_lbl"].setText(m["type"])
+
+        if m["fixed"]:
+            row["angle_lbl"].setText("fixed")
+            row["deg_lbl"].setText("-")
+            row["down_btn"].setEnabled(False)
+            row["up_btn"].setEnabled(False)
+            row["name_lbl"].setStyleSheet("")
+            row["type_lbl"].setStyleSheet("")
+            row["angle_lbl"].setStyleSheet("")
+        elif m["type"] == "none":
+            row["angle_lbl"].setText("unused")
+            row["deg_lbl"].setText("-")
+            row["down_btn"].setEnabled(False)
+            row["up_btn"].setEnabled(False)
+            row["name_lbl"].setStyleSheet("color: gray;")
+            row["type_lbl"].setStyleSheet("color: gray;")
+            row["angle_lbl"].setStyleSheet("color: gray;")
+        else:
+            row["angle_lbl"].setText(f'{m["q"]:.2f}')
+            row["deg_lbl"].setText(f'{math.degrees(m["q"]):.1f}')
+            row["down_btn"].setEnabled(True)
+            row["up_btn"].setEnabled(True)
+            row["name_lbl"].setStyleSheet("")
+            row["type_lbl"].setStyleSheet("")
+            row["angle_lbl"].setStyleSheet("")
+
+    def refresh_all_control_rows(self):
+        for i in range(len(self.modules)):
+            self.refresh_control_row(i)
+
+    def apply_geometry(self):
+        try:
+            for i, m in enumerate(self.modules):
+                row = self.config_rows[i]
+                mtype = row["type_box"].currentText()
+                meta = MODULE_TYPES[mtype]
+
+                m["type"] = mtype
+                m["joint_kind"] = meta["joint_kind"]
+                m["alpha"] = meta["alpha"]
+                m["theta_offset"] = meta["theta_offset"]
+                m["a"] = float(row["a_edit"].text())
+                m["d"] = float(row["d_edit"].text())
+
+                if m["type"] == "none":
+                    m["q"] = 0.0
+                    m["qlim"] = (0.0, 0.0)
+                elif not m["fixed"]:
+                    qmin = float(row["qmin_edit"].text())
+                    qmax = float(row["qmax_edit"].text())
+                    m["qlim"] = (qmin, qmax)
+                    m["q"] = max(qmin, min(qmax, m["q"]))
+
+            self.refresh_all_control_rows()
+            self.plot_data()
+        except Exception as e:
+            print("Apply geometry error:", e)
+
+    def reset_angles(self):
+        for i, m in enumerate(self.modules):
+            if not m["fixed"] and m["type"] != "none":
+                m["q"] = 0.0
+        self.refresh_all_control_rows()
+        self.plot_data()
+
+    def send(self):
+        try:
+            values = [m["q"] for m in self.modules if (not m["fixed"] and m["type"] != "none")]
+            data = ",".join(f"{v:.3f}" for v in values)
+            print("SEND:", data)
+        except Exception as e:
+            print("Send error:", e)
+
+    def plot_data(self):
+        try:
+            X, Y, Z = forward_kin(self.modules)
+            if hasattr(self.window, "ax"):
+                self.window.ax.cla()
+                self.window.ax.plot(X, Y, Z, 'b-o', linewidth=2, markersize=5, label='Arm')
+                self.window.ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='r', s=90, label='End-effector')
+                self.window.ax.set_xlabel('X (m)')
+                self.window.ax.set_ylabel('Y (m)')
+                self.window.ax.set_zlabel('Z (m)')
+                self.window.ax.set_xlim([-2, 2])
+                self.window.ax.set_ylim([-2, 2])
+                self.window.ax.set_zlim([0, 3])
+                self.window.ax.legend()
+                self.window.fig.canvas.draw()
+        except Exception as e:
+            print("Plot error:", e)
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
     win = MainWindow()
-    ui = JointControlUI()
+    ui = ModularJointUI()
     ui.setupUi(win)
     win.show()
     plt.show()
     sys.exit(app.exec_())
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
