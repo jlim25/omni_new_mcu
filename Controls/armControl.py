@@ -4,22 +4,26 @@
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 import sys
+import os
 import math
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from sympy import symbols, cos, sin, pi, simplify, sqrt, atan2, Matrix
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ========== CONFIGURABLE DH PARAMETERS FOR VARIABLE ARM LENGTHS ==========
-DH = [  # Modified DH for KUKA KR210 (defaults); change 'a'/'d' for custom lengths
-    {'a': 0.0,   'alpha': 0.0,     'd': 0,   'theta_offset': 0.0},     # Joint 1
-    {'a': 0.8,  'alpha': -pi/2,   'd': 0.0,    'theta_offset': -pi/2},   # Joint 2
-    {'a': 0.75,  'alpha': 0.0,     'd': 0.0,    'theta_offset': 0.0},     # Joint 3 (elbow)
-    {'a': -0.054,'alpha': -pi/2,   'd': 1.5,    'theta_offset': 0.0},     # Joint 4 (wrist1)
-    {'a': 0.0,   'alpha': pi/2,    'd': 0.0,    'theta_offset': 0.0},     # Joint 5 (wrist2)
-    {'a': 0.0,   'alpha': -pi/2,   'd': 0.0,    'theta_offset': 0.0},     # Joint 6 (wrist3)
-    {'a': 0.0,   'alpha': 0.0,     'd': 0.303,  'theta_offset': 0.0}      # Gripper offset
+DH = [
+    {'a': 0.0,   'alpha': 0.0,   'd': 0.75,  'theta_offset': 0.0},
+    {'a': 0.35,  'alpha': -pi/2, 'd': 0.0,   'theta_offset': -pi/2},
+    {'a': 1.25,  'alpha': 0.0,   'd': 0.0,   'theta_offset': 0.0},
+    {'a': -0.054,'alpha': -pi/2, 'd': 1.5,   'theta_offset': 0.0},
+    {'a': 0.0,   'alpha': pi/2,  'd': 0.0,   'theta_offset': 0.0},
+    {'a': 0.0,   'alpha': -pi/2, 'd': 0.0,   'theta_offset': 0.0},
+    {'a': 0.0,   'alpha': 0.0,   'd': 0.303, 'theta_offset': 0.0}
 ]
+
 
 # ========== FORWARD/INVERSE KINEMATICS FUNCTIONS ==========
 
@@ -79,9 +83,9 @@ def get_hypotenuse(a, b):
     return sqrt(a*a + b*b)
 
 def get_cosine_law_angle(a, b, c):
-    """Cosine law angle between sides a and b."""
     cos_gamma = (a*a + b*b - c*c) / (2*a*b)
-    sin_gamma = sqrt(1 - cos_gamma * cos_gamma)
+    cos_gamma = max(-1.0, min(1.0, float(cos_gamma)))
+    sin_gamma = math.sqrt(max(0.0, 1 - cos_gamma * cos_gamma))
     return atan2(sin_gamma, cos_gamma)
 
 def get_wrist_center(gripper_point, R0g, DH):
@@ -177,7 +181,7 @@ class Ui_ArmControl(object):
         ArmControl.resize(482, 537)
         ArmControl.setMaximumSize(QtCore.QSize(16777215, 16777215))
         icon = QtGui.QIcon()
-        icon.addPixmap(QtGui.QPixmap("../roboticArm.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        icon.addPixmap(QtGui.QPixmap(os.path.join(BASE_DIR, "roboticArm.png")), QtGui.QIcon.Normal, QtGui.QIcon.Off)
         ArmControl.setWindowIcon(icon)
         ArmControl.setWindowOpacity(1.0)
         ArmControl.setAutoFillBackground(False)
@@ -191,7 +195,7 @@ class Ui_ArmControl(object):
         self.xUp.setStyleSheet("color : rgb(255, 255, 255);\n")
         self.xUp.setText("")
         icon1 = QtGui.QIcon()
-        icon1.addPixmap(QtGui.QPixmap("up.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        icon1.addPixmap(QtGui.QPixmap(os.path.join(BASE_DIR, "up.png")), QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.xUp.setIcon(icon1)
         self.xUp.setIconSize(QtCore.QSize(32, 32))
         self.xUp.setFlat(True)
@@ -298,7 +302,7 @@ class Ui_ArmControl(object):
         self.xDown.setStyleSheet("color : rgb(255, 255, 255);\n")
         self.xDown.setText("")
         icon2 = QtGui.QIcon()
-        icon2.addPixmap(QtGui.QPixmap("down.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        icon2.addPixmap(QtGui.QPixmap(os.path.join(BASE_DIR, "down.png")), QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.xDown.setIcon(icon2)
         self.xDown.setIconSize(QtCore.QSize(32, 32))
         self.xDown.setFlat(True)

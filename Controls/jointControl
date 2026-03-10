@@ -1,0 +1,251 @@
+# -*- coding: utf-8 -*-
+# JOINT CONTROL GUI - Individual joint angle control for 6-DOF arm
+# Companion to armControl.py (pose-based control)
+
+from PyQt5 import QtCore, QtGui, QtWidgets
+import sys
+import os
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Joint angle limits (radians)
+JOINT_LIMITS = [
+    (-3.14, 3.14),   # q1
+    (-1.57, 1.57),   # q2
+    (-1.57, 1.57),   # q3
+    (-3.14, 3.14),   # q4
+    (-3.14, 3.14),   # q5
+    (-3.14, 3.14),   # q6
+]
+
+STEP = 0.05  # radians per button press
+
+# ========== FORWARD KINEMATICS (matches invKin-3.py DH) ==========
+
+def pose(theta, alpha, a, d):
+    c, s = math.cos(theta), math.sin(theta)
+    ca, sa = math.cos(alpha), math.sin(alpha)
+    return np.array([
+        [c,  -s,   0,   a],
+        [s*ca, c*ca, -sa, -d*sa],
+        [s*sa, c*sa,  ca,  d*ca],
+        [0,    0,    0,   1]
+    ])
+
+def forward_kin(q1, q2, q3, q4, q5, q6):
+    d90 = math.pi / 2
+    transforms = [
+        pose(q1,       0,    0,     0.75),
+        pose(q2 - d90, -d90, 0.35,  0),
+        pose(q3,       0,    1.25,  0),
+        pose(q4,       -d90, -0.054,1.5),
+        pose(q5,       d90,  0,     0),
+        pose(q6,       -d90, 0,     0),
+        pose(0,        0,    0,     0.303),
+    ]
+    X, Y, Z = [], [], []
+    T = np.eye(4)
+    for Ti in transforms:
+        T = T @ Ti
+        X.append(T[0, 3])
+        Y.append(T[1, 3])
+        Z.append(T[2, 3])
+    return np.array(X), np.array(Y), np.array(Z)
+
+def create_plot():
+    fig = plt.figure(figsize=(7, 6))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)'); ax.set_zlabel('Z (m)')
+    ax.set_xlim([-0.5, 2]); ax.set_ylim([-1.5, 1.5]); ax.set_zlim([0, 3.5])
+    ax.set_autoscale_on(False)
+    return fig, ax
+
+# ========== GUI ==========
+
+class JointControlUI(object):
+
+    JOINT_NAMES = ['q1', 'q2', 'q3', 'q4', 'q5', 'q6']
+    INIT_VALS   = [0.0,  0.0,  0.0,  0.0,  0.0,  0.0]
+
+    def setupUi(self, win):
+        win.setWindowTitle('Joint Control')
+        win.resize(460, 480)
+
+        icon_up   = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, 'up.png')))
+        icon_down = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, 'down.png')))
+
+        self.val_labels  = []
+        self.up_buttons  = []
+        self.down_buttons = []
+
+        # Title
+        title = QtWidgets.QLabel('Joint Control', win)
+        title.setGeometry(QtCore.QRect(220, 10, 200, 40))
+        font = QtGui.QFont('Roboto Slab', 20)
+        title.setFont(font)
+
+        subtitle = QtWidgets.QLabel('OMNI Robot', win)
+        subtitle.setGeometry(QtCore.QRect(10, 10, 200, 40))
+        subtitle.setFont(QtGui.QFont('Roboto Slab', 20))
+        subtitle.setAlignment(QtCore.Qt.AlignRight)
+
+        base_y = 70
+        row_h  = 55
+
+        for i, (name, init) in enumerate(zip(self.JOINT_NAMES, self.INIT_VALS)):
+            y = base_y + i * row_h
+
+            # Joint label
+            lbl = QtWidgets.QLabel(name.upper(), win)
+            lbl.setGeometry(QtCore.QRect(20, y, 60, 40))
+            lbl.setFont(QtGui.QFont('Roboto Slab', 12))
+            lbl.setStyleSheet('background-color: rgb(237,255,248)')
+            lbl.setFrameShape(QtWidgets.QFrame.Panel)
+            lbl.setFrameShadow(QtWidgets.QFrame.Raised)
+            lbl.setAlignment(QtCore.Qt.AlignCenter)
+
+            # Down button
+            btn_down = QtWidgets.QPushButton('', win)
+            btn_down.setGeometry(QtCore.QRect(100, y, 40, 40))
+            btn_down.setIcon(icon_down)
+            btn_down.setIconSize(QtCore.QSize(30, 30))
+            btn_down.setFlat(True)
+            btn_down.setStyleSheet('background-color: transparent;')
+
+            # Value display
+            val_lbl = QtWidgets.QLabel(f'{init:.2f}', win)
+            val_lbl.setGeometry(QtCore.QRect(150, y, 80, 40))
+            val_lbl.setFont(QtGui.QFont('Roboto Slab', 13))
+            val_lbl.setFrameShape(QtWidgets.QFrame.Box)
+            val_lbl.setFrameShadow(QtWidgets.QFrame.Raised)
+            val_lbl.setLineWidth(1)
+            val_lbl.setAlignment(QtCore.Qt.AlignCenter)
+
+            # Up button
+            btn_up = QtWidgets.QPushButton('', win)
+            btn_up.setGeometry(QtCore.QRect(240, y, 40, 40))
+            btn_up.setIcon(icon_up)
+            btn_up.setIconSize(QtCore.QSize(30, 30))
+            btn_up.setFlat(True)
+            btn_up.setStyleSheet('background-color: transparent;')
+
+            # Angle in degrees display (read-only info)
+            deg_lbl = QtWidgets.QLabel(f'({math.degrees(init):.1f}°)', win)
+            deg_lbl.setGeometry(QtCore.QRect(295, y, 100, 40))
+            deg_lbl.setFont(QtGui.QFont('Roboto Slab', 10))
+            deg_lbl.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            deg_lbl.setObjectName(f'deg_{i}')
+
+            self.val_labels.append(val_lbl)
+            self.up_buttons.append(btn_up)
+            self.down_buttons.append(btn_down)
+
+            # Connect with closure
+            btn_up.clicked.connect(lambda _, idx=i: self.increment(idx))
+            btn_down.clicked.connect(lambda _, idx=i: self.decrement(idx))
+
+        # Send button
+        self.sendBtn = QtWidgets.QPushButton('SEND', win)
+        self.sendBtn.setGeometry(QtCore.QRect(20, 400, 120, 40))
+        self.sendBtn.setFont(QtGui.QFont('Roboto Slab', 12))
+        self.sendBtn.setStyleSheet(
+            'background-color: rgb(50,180,100); color: white; border-radius: 6px;')
+        self.sendBtn.clicked.connect(self.send)
+
+        # Reset button
+        self.resetBtn = QtWidgets.QPushButton('RESET', win)
+        self.resetBtn.setGeometry(QtCore.QRect(155, 400, 120, 40))
+        self.resetBtn.setFont(QtGui.QFont('Roboto Slab', 12))
+        self.resetBtn.setStyleSheet(
+            'background-color: rgb(200,80,60); color: white; border-radius: 6px;')
+        self.resetBtn.clicked.connect(self.reset)
+
+        self.window = win
+        self.plot_data()
+
+    def get_angles(self):
+        return [float(lbl.text()) for lbl in self.val_labels]
+
+    def increment(self, idx):
+        val = float(self.val_labels[idx].text())
+        lo, hi = JOINT_LIMITS[idx]
+        val = min(hi, round(val + STEP, 3))
+        self.val_labels[idx].setText(f'{val:.2f}')
+        self._update_deg(idx, val)
+        self.plot_data()
+
+    def decrement(self, idx):
+        val = float(self.val_labels[idx].text())
+        lo, hi = JOINT_LIMITS[idx]
+        val = max(lo, round(val - STEP, 3))
+        self.val_labels[idx].setText(f'{val:.2f}')
+        self._update_deg(idx, val)
+        self.plot_data()
+
+    def reset(self):
+        for i, init in enumerate(self.INIT_VALS):
+            self.val_labels[i].setText(f'{init:.2f}')
+            self._update_deg(i, init)
+        self.plot_data()
+
+    def _update_deg(self, idx, val_rad):
+        deg_lbl = self.window.findChild(QtWidgets.QLabel, f'deg_{idx}')
+        if deg_lbl:
+            deg_lbl.setText(f'({math.degrees(val_rad):.1f}°)')
+
+    def send(self):
+        try:
+            angles = self.get_angles()
+            dataString = ','.join(f'{a:.3f}' for a in angles)
+            print(f'SEND: {dataString}')
+            # Uncomment to transmit over serial:
+            # self.window.SerialObj.sendString(dataString)
+        except Exception as e:
+            print(f'Send error: {e}')
+
+    def plot_data(self):
+        try:
+            q1, q2, q3, q4, q5, q6 = self.get_angles()
+            X, Y, Z = forward_kin(q1, q2, q3, q4, q5, q6)
+            if hasattr(self.window, 'ax'):
+                ax = self.window.ax
+                ax.cla()
+                ax.plot(X, Y, Z, 'b-o', linewidth=2, markersize=6, label='Arm')
+                ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='r', s=100, label='End-effector')
+                ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)'); ax.set_zlabel('Z (m)')
+                ax.set_xlim([-0.5, 2]); ax.set_ylim([-1.5, 1.5]); ax.set_zlim([0, 3.5])
+                ax.legend()
+                self.window.fig.canvas.draw()
+        except Exception as e:
+            print(f'Plot error: {e}')
+
+
+# ========== MAIN WINDOW ==========
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.fig, self.ax = create_plot()
+        plt.ion()
+        # Uncomment for serial:
+        # from SerialCom import SerialCom
+        # self.SerialObj = SerialCom()
+        # self.SerialObj.getConn('COM9', 9600)
+
+
+def main():
+    app = QtWidgets.QApplication(sys.argv)
+    win = MainWindow()
+    ui = JointControlUI()
+    ui.setupUi(win)
+    win.show()
+    plt.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == '__main__':
+    main()
