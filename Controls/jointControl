@@ -34,17 +34,17 @@ MODULE_TYPES = {
 ROBOT_CONFIG = [
     {"name": "J1", "type": "swivel",   "a": 0.0,  "d": 0.75,  "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
     {"name": "J2", "type": "rotation", "a": 0.0,  "d": 0.0,   "z_world": 0.3, "alpha": -math.pi / 2, "theta_offset": -math.pi / 2, "q": 0.0, "home_q": 0.0},
-    {"name": "J3", "type": "rotation", "a": 1.25, "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
-    {"name": "J4", "type": "rotation", "a": 0.0,  "d": 1.5,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
-    {"name": "J5", "type": "none",     "a": 0.0,  "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
-    {"name": "J6", "type": "none",     "a": 0.0,  "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
-    {"name": "GRIP","type": "swivel",  "a": 0.0,  "d": 0.303, "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0, "fixed": True},
+    {"name": "J3", "type": "rotation", "a": 1, "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "J4", "type": "rotation", "a": 1,  "d": 1.5,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "J5", "type": "none",     "a": 0,  "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "J6", "type": "none",     "a": 0,  "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "GRIP","type": "swivel",  "a": 1,  "d": 0.0, "z_world": 0.0, "alpha": 1.571,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0, "fixed": True},
 ]
 
 SERVO_CAL = {
     "J1":   {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
     "J2":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J3":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J3":   {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
     "J4":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
     "GRIP": {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
 }
@@ -91,13 +91,6 @@ def joint_to_servo_deg(joint_name, joint_rad):
     )
     return clamp(servo_deg, c["servo_min"], c["servo_max"])
 
-def joint_axis_family(joint_type):
-    if joint_type == "swivel":
-        return "swivel"
-    if joint_type == "rotation":
-        return "rotation"
-    return "none"
-
 def auto_geom_from_types(prev_type, curr_type):
     if curr_type == "none":
         return 0.0, 0.0, 0.0, 0.0
@@ -106,19 +99,19 @@ def auto_geom_from_types(prev_type, curr_type):
         if curr_type == "swivel":
             return 0.0, 1.0, 0.0, 0.0
         if curr_type == "rotation":
-            return 0.0, 1.0, -math.pi / 2, 0.0
+            return 1.0, 0.0, 0.0, 0.0
 
     if prev_type == "swivel" and curr_type == "swivel":
         return 0.0, 1.0, 0.0, 0.0
 
     if prev_type == "swivel" and curr_type == "rotation":
-        return 0.0, 1.0, -math.pi / 2, 0.0
+        return 1.0, 0.0, -math.pi / 2, 0.0
 
     if prev_type == "rotation" and curr_type == "rotation":
         return 1.0, 0.0, 0.0, 0.0
 
     if prev_type == "rotation" and curr_type == "swivel":
-        return 0.0, 1.0, -math.pi / 2, 0.0
+        return 0.0, 1.0, math.pi / 2, 0.0
 
     return 0.0, 1.0, 0.0, 0.0
 
@@ -287,7 +280,7 @@ class ModularJointUI(object):
             f"z_world = extra absolute vertical shift in world Z\n"
             f"alpha = twist between consecutive active joints; auto layout fills a starting value ({self.angle_unit_short()})\n"
             f"theta_offset = mounting zero offset; auto layout also fills a starting value ({self.angle_unit_short()})\n"
-            f"Auto layout leaves J1 and J2 unchanged, then fills later joints with default a or d = 1.0\n"
+            f"Auto layout leaves J1 and J2 unchanged, then fills later joints from joint-type transitions\n"
             f"Swivel limits default to full 360 degrees\n"
             f"Control step = {self.angle_to_display(self.step_rad):.3f} {self.angle_unit_short()}"
         )
@@ -391,7 +384,7 @@ class ModularJointUI(object):
             "Blue line: links\n"
             "Red point: end-effector\n"
             "Labels are shown only for active chain points\n"
-            "Auto layout gives a quick DH-style starting geometry and preserves J1/J2"
+            "Swivel and rotation use different auto-assigned frame twists"
         )
         plot_info.setAlignment(QtCore.Qt.AlignTop)
         right_layout.addWidget(plot_info)
