@@ -1,0 +1,1319 @@
+# -*- coding: utf-8 -*-
+
+from PyQt5 import QtCore, QtGui, QtWidgets
+import sys
+import os
+import math
+import numpy as np
+import matplotlib
+matplotlib.use("Qt5Agg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+from mpl_toolkits.mplot3d import Axes3D
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+JOINT_TYPES = {
+    "none": {
+        "default_limits": (0.0, 0.0),
+        "axis": "z",
+    },
+    "swivel": {
+        "default_limits": (-math.pi, math.pi),
+        "axis": "z",
+    },
+    "rotation": {
+        "default_limits": (-math.pi / 2, math.pi / 2),
+        "axis": "y",
+    }
+}
+
+
+LINK_PRESETS_IN = [4, 6, 8]
+LINK_PRESETS_M = {
+    "4 in": 0.1016,
+    "6 in": 0.1524,
+    "8 in": 0.2032,
+}
+
+
+SERVO_CAL = {
+    "J1":   {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J2":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J3":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J4":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J5":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J6":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J7":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J8":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "GRIP": {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+}
+
+
+def make_default_modules(joint_count):
+    modules = []
+
+    if joint_count >= 1:
+        modules.append({
+            "name": "J1",
+            "type": "swivel",
+            "axis": "z",
+            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+            "link": np.array([0.0, 0.0, 0.1524], dtype=float),
+            "q": 0.0,
+            "home_q": 0.0,
+            "qlim": JOINT_TYPES["swivel"]["default_limits"],
+            "fixed": False,
+        })
+
+    for i in range(2, joint_count + 1):
+        modules.append({
+            "name": f"J{i}",
+            "type": "rotation",
+            "axis": "y",
+            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+            "link": np.array([0.0, 0.0, 0.1524 if i < joint_count else 0.1016], dtype=float),
+            "q": 0.0,
+            "home_q": 0.0,
+            "qlim": JOINT_TYPES["rotation"]["default_limits"],
+            "fixed": False,
+        })
+
+    modules.append({
+        "name": "GRIP",
+        "type": "swivel",
+        "axis": "z",
+        "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+        "link": np.array([0.0, 0.0, 0.0], dtype=float),
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": JOINT_TYPES["swivel"]["default_limits"],
+        "fixed": True,
+    })
+
+    return modules
+
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+
+def map_range(x, in_min, in_max, out_min, out_max):
+    if abs(in_max - in_min) < 1e-9:
+        return out_min
+    return out_min + (x - in_min) * (out_max - out_min) / (in_max - in_min)
+
+
+def joint_to_servo_deg(joint_name, joint_rad):
+    if joint_name not in SERVO_CAL:
+        return None
+    c = SERVO_CAL[joint_name]
+    joint_deg = math.degrees(joint_rad)
+    if c.get("invert", False):
+        joint_deg = -joint_deg
+    servo_deg = map_range(
+        joint_deg,
+        c["joint_min"], c["joint_max"],
+        c["servo_min"], c["servo_max"]
+    )
+    return clamp(servo_deg, c["servo_min"], c["servo_max"])
+
+
+def Tx(x, y, z):
+    T = np.eye(4)
+    T[:3, 3] = [x, y, z]
+    return T
+
+
+def Rx(q):
+    c, s = math.cos(q), math.sin(q)
+    return np.array([
+        [1, 0, 0, 0],
+        [0, c, -s, 0],
+        [0, s,  c, 0],
+        [0, 0, 0, 1]
+    ], dtype=float)
+
+
+def Ry(q):
+    c, s = math.cos(q), math.sin(q)
+    return np.array([
+        [ c, 0, s, 0],
+        [ 0, 1, 0, 0],
+        [-s, 0, c, 0],
+        [ 0, 0, 0, 1]
+    ], dtype=float)
+
+
+def Rz(q):
+    c, s = math.cos(q), math.sin(q)
+    return np.array([
+        [c, -s, 0, 0],
+        [s,  c, 0, 0],
+        [0,  0, 1, 0],
+        [0,  0, 0, 1]
+    ], dtype=float)
+
+
+def rot_from_axis(axis, q):
+    axis = axis.lower()
+    if axis == "x":
+        return Rx(q)
+    if axis == "y":
+        return Ry(q)
+    return Rz(q)
+
+
+def nearest_link_preset_text(length_m):
+    return min(LINK_PRESETS_M.keys(), key=lambda k: abs(LINK_PRESETS_M[k] - length_m))
+
+
+def auto_fit_axes_cube(ax, X, Y, Z, scale=1.5, min_cube=0.4):
+    x_min, x_max = float(np.min(X)), float(np.max(X))
+    y_min, y_max = float(np.min(Y)), float(np.max(Y))
+    z_min, z_max = float(np.min(Z)), float(np.max(Z))
+
+    x_mid = 0.5 * (x_min + x_max)
+    y_mid = 0.5 * (y_min + y_max)
+    z_mid = 0.5 * (z_min + z_max)
+
+    dx = x_max - x_min
+    dy = y_max - y_min
+    dz = z_max - z_min
+
+    span = max(dx, dy, dz, min_cube)
+    cube_side = span * scale
+    half = 0.5 * cube_side
+
+    z_low = z_mid - half
+    z_high = z_mid + half
+
+    if z_low < 0.0:
+        z_high += -z_low
+        z_low = 0.0
+
+    ax.set_xlim([x_mid - half, x_mid + half])
+    ax.set_ylim([y_mid - half, y_mid + half])
+    ax.set_zlim([z_low, z_high])
+    ax.set_box_aspect((1, 1, 1))
+
+
+def forward_kin(modules):
+    T = np.eye(4)
+
+    chain_pts = [np.array([0.0, 0.0, 0.0], dtype=float)]
+    joint_pts = [(0.0, 0.0, 0.0)]
+    point_names = ["BASE"]
+
+    frames = [{
+        "name": "BASE",
+        "origin": np.array([0.0, 0.0, 0.0], dtype=float),
+        "x_axis": np.array([1.0, 0.0, 0.0], dtype=float),
+        "y_axis": np.array([0.0, 1.0, 0.0], dtype=float),
+        "z_axis": np.array([0.0, 0.0, 1.0], dtype=float),
+    }]
+
+    for m in modules:
+        T = T @ Tx(*m["offset"])
+
+        joint_origin = T[:3, 3].copy()
+        R_before = T[:3, :3].copy()
+
+        joint_pts.append((float(joint_origin[0]), float(joint_origin[1]), float(joint_origin[2])))
+        point_names.append(m["name"])
+        frames.append({
+            "name": m["name"],
+            "origin": joint_origin,
+            "x_axis": R_before[:, 0].copy(),
+            "y_axis": R_before[:, 1].copy(),
+            "z_axis": R_before[:, 2].copy(),
+        })
+
+        q = 0.0 if m["fixed"] or m["type"] == "none" else m["q"]
+        T = T @ rot_from_axis(m["axis"], q)
+        T = T @ Tx(*m["link"])
+
+        link_end = T[:3, 3].copy()
+        chain_pts.append(link_end)
+
+    X = np.array([p[0] for p in chain_pts], dtype=float)
+    Y = np.array([p[1] for p in chain_pts], dtype=float)
+    Z = np.array([p[2] for p in chain_pts], dtype=float)
+    return X, Y, Z, joint_pts, point_names, frames
+
+
+def unit_vector(v):
+    n = np.linalg.norm(v)
+    if n < 1e-9:
+        return np.array([0.0, 0.0, 1.0], dtype=float)
+    return v / n
+
+
+def orthonormal_basis_from_z(direction):
+    z_axis = unit_vector(direction)
+    helper = np.array([0.0, 0.0, 1.0], dtype=float)
+    if abs(np.dot(z_axis, helper)) > 0.95:
+        helper = np.array([0.0, 1.0, 0.0], dtype=float)
+
+    x_axis = np.cross(helper, z_axis)
+    x_axis = unit_vector(x_axis)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = unit_vector(y_axis)
+    return x_axis, y_axis, z_axis
+
+
+def draw_cylinder(ax, p0, p1, radius=0.018, color="#b8c2cc", edgecolor="#7c8794", alpha=1.0, n_theta=24):
+    p0 = np.array(p0, dtype=float)
+    p1 = np.array(p1, dtype=float)
+    axis = p1 - p0
+    length = np.linalg.norm(axis)
+    if length < 1e-9:
+        return
+
+    ex, ey, ez = orthonormal_basis_from_z(axis)
+
+    theta = np.linspace(0, 2 * np.pi, n_theta)
+    t = np.linspace(0, length, 2)
+    theta_grid, t_grid = np.meshgrid(theta, t)
+
+    X = p0[0] + ez[0] * t_grid + radius * np.cos(theta_grid) * ex[0] + radius * np.sin(theta_grid) * ey[0]
+    Y = p0[1] + ez[1] * t_grid + radius * np.cos(theta_grid) * ex[1] + radius * np.sin(theta_grid) * ey[1]
+    Z = p0[2] + ez[2] * t_grid + radius * np.cos(theta_grid) * ex[2] + radius * np.sin(theta_grid) * ey[2]
+
+    ax.plot_surface(X, Y, Z, color=color, linewidth=0.12, edgecolor=edgecolor, shade=True, alpha=alpha, antialiased=False)
+
+    r = np.linspace(0, radius, 12)
+    theta2 = np.linspace(0, 2 * np.pi, n_theta)
+    rr, tt = np.meshgrid(r, theta2)
+
+    cap0x = p0[0] + rr * np.cos(tt) * ex[0] + rr * np.sin(tt) * ey[0]
+    cap0y = p0[1] + rr * np.cos(tt) * ex[1] + rr * np.sin(tt) * ey[1]
+    cap0z = p0[2] + rr * np.cos(tt) * ex[2] + rr * np.sin(tt) * ey[2]
+
+    cap1x = p1[0] + rr * np.cos(tt) * ex[0] + rr * np.sin(tt) * ey[0]
+    cap1y = p1[1] + rr * np.cos(tt) * ex[1] + rr * np.sin(tt) * ey[1]
+    cap1z = p1[2] + rr * np.cos(tt) * ex[2] + rr * np.sin(tt) * ey[2]
+
+    ax.plot_surface(cap0x, cap0y, cap0z, color=color, linewidth=0, shade=True, alpha=alpha, antialiased=False)
+    ax.plot_surface(cap1x, cap1y, cap1z, color=color, linewidth=0, shade=True, alpha=alpha, antialiased=False)
+
+
+def draw_box_centered(ax, center, size, color="#cfd4da", edgecolor="#6b7280", alpha=1.0):
+    cx, cy, cz = center
+    sx, sy, sz = size
+    ax.bar3d(
+        [cx - sx / 2], [cy - sy / 2], [cz - sz / 2],
+        [sx], [sy], [sz],
+        color=color, edgecolor=edgecolor, shade=True, alpha=alpha
+    )
+
+
+def draw_joint_box(ax, center, main_size=(0.050, 0.038, 0.062), accent_scale=1.0, is_base=False):
+    cx, cy, cz = center
+
+    body_color = "#d9dee4"
+    edge_color = "#7c8794"
+    bracket_color = "#2b313a"
+    cap_color = "#111827"
+    face_color = "#aab4bf"
+
+    sx, sy, sz = main_size
+    sx *= accent_scale
+    sy *= accent_scale
+    sz *= accent_scale
+
+    draw_box_centered(ax, (cx, cy, cz), (sx, sy, sz), color=body_color, edgecolor=edge_color, alpha=1.0)
+
+    plate_t = sy * 0.38
+    plate_w = sx * 0.42
+    plate_h = sz * 0.58
+    side_offset = sy * 0.52
+
+    draw_box_centered(ax, (cx, cy - side_offset, cz - sz * 0.08), (plate_w, plate_t, plate_h),
+                      color=bracket_color, edgecolor="#111827", alpha=1.0)
+    draw_box_centered(ax, (cx, cy + side_offset, cz - sz * 0.08), (plate_w, plate_t, plate_h),
+                      color=bracket_color, edgecolor="#111827", alpha=1.0)
+
+    cap_r = min(sx, sz) * 0.16
+    p0 = np.array([cx, cy - sy * 0.70, cz], dtype=float)
+    p1 = np.array([cx, cy + sy * 0.70, cz], dtype=float)
+    draw_cylinder(ax, p0, p1, radius=cap_r, color=cap_color, edgecolor="#0b0f19", alpha=1.0, n_theta=20)
+
+    draw_box_centered(ax, (cx, cy, cz + sz * 0.34), (sx * 0.72, sy * 0.80, sz * 0.10),
+                      color=face_color, edgecolor=edge_color, alpha=0.95)
+
+    if is_base:
+        draw_box_centered(ax, (cx, cy, cz - sz * 0.60), (sx * 1.45, sy * 1.45, sz * 0.35),
+                          color="#8f99a6", edgecolor="#6b7280", alpha=1.0)
+
+
+def draw_servo_head(ax, center, radius=0.010, color="#111827"):
+    center = np.array(center, dtype=float)
+    p0 = center + np.array([0.0, -0.016, 0.0])
+    p1 = center + np.array([0.0,  0.016, 0.0])
+    draw_cylinder(ax, p0, p1, radius=radius, color=color, edgecolor="#020617", alpha=1.0, n_theta=22)
+
+
+def draw_robot_model(ax, joint_pts, frames):
+    steel_color = "#c7d0d9"
+    steel_edge = "#8b98a8"
+    tube_dark = "#95a3b3"
+
+    origins = [np.array(p, dtype=float) for p in joint_pts]
+
+    if len(origins) >= 2:
+        for i in range(len(origins) - 1):
+            p0 = origins[i]
+            p1 = origins[i + 1]
+            seg = p1 - p0
+            seg_len = np.linalg.norm(seg)
+            if seg_len < 1e-9:
+                continue
+
+            u = seg / seg_len
+            joint_clear = min(0.030, seg_len * 0.18)
+            a = p0 + u * joint_clear
+            b = p1 - u * joint_clear
+
+            if np.linalg.norm(b - a) > 1e-9:
+                draw_cylinder(ax, a, b, radius=0.0105, color=steel_color, edgecolor=steel_edge, alpha=1.0, n_theta=24)
+
+                mid = 0.5 * (a + b)
+                sleeve_half = min(0.022, 0.18 * np.linalg.norm(b - a))
+                s0 = mid - u * sleeve_half
+                s1 = mid + u * sleeve_half
+                draw_cylinder(ax, s0, s1, radius=0.0135, color=tube_dark, edgecolor="#6b7280", alpha=1.0, n_theta=22)
+
+    for idx, f in enumerate(frames[1:]):
+        origin = f["origin"]
+        scale = 1.18 if idx == 0 else 1.0
+        draw_joint_box(ax, origin, main_size=(0.050, 0.038, 0.062), accent_scale=scale, is_base=False)
+        draw_servo_head(ax, origin, radius=0.0088)
+
+    base = frames[0]["origin"]
+    draw_joint_box(ax, base + np.array([0.0, 0.0, 0.020]), main_size=(0.058, 0.050, 0.050), accent_scale=1.18, is_base=True)
+
+
+def create_plot():
+    fig = plt.figure(figsize=(7.5, 6.5), facecolor="#0f172a")
+    ax = fig.add_subplot(111, projection='3d')
+    return fig, ax
+
+
+def style_3d_axes(ax, show_plot_axes=True):
+    bg = "#0b1220"
+    pane = (0.11, 0.16, 0.25, 1.0)
+    grid = (0.55, 0.65, 0.78, 0.18)
+    text = "#e5e7eb"
+    line = (0.65, 0.75, 0.85, 0.55)
+
+    ax.set_facecolor(bg)
+    ax.set_xlabel("X (m)", color=text)
+    ax.set_ylabel("Y (m)", color=text)
+    ax.set_zlabel("Z (m)", color=text)
+    ax.tick_params(colors=text, grid_color=grid, grid_alpha=0.35)
+
+    try:
+        ax.xaxis.set_pane_color(pane)
+        ax.yaxis.set_pane_color(pane)
+        ax.zaxis.set_pane_color(pane)
+    except Exception:
+        pass
+
+    try:
+        ax.xaxis.line.set_color(line)
+        ax.yaxis.line.set_color(line)
+        ax.zaxis.line.set_color(line)
+    except Exception:
+        pass
+
+    ax.grid(show_plot_axes, color=grid, linestyle='-', linewidth=0.6)
+
+    if show_plot_axes:
+        ax.set_axis_on()
+    else:
+        ax.set_axis_off()
+
+
+def draw_frame_axes(ax, frames, show_axes_frames=True, axis_len=0.04):
+    if not show_axes_frames:
+        return
+
+    try:
+        xs = [f["origin"][0] for f in frames]
+        ys = [f["origin"][1] for f in frames]
+        zs = [f["origin"][2] for f in frames]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs), 0.2)
+        axis_len = max(0.03, span * 0.08)
+    except Exception:
+        axis_len = 0.05
+
+    for f in frames:
+        o = f["origin"]
+        x = f["x_axis"]
+        y = f["y_axis"]
+        z = f["z_axis"]
+
+        ax.quiver(o[0], o[1], o[2], x[0], x[1], x[2], length=axis_len, normalize=True, color='#ef4444')
+        ax.quiver(o[0], o[1], o[2], y[0], y[1], y[2], length=axis_len, normalize=True, color='#22c55e')
+        ax.quiver(o[0], o[1], o[2], z[0], z[1], z[2], length=axis_len, normalize=True, color='#3b82f6')
+
+
+def apply_app_style(app):
+    app.setStyle("Fusion")
+    app.setStyleSheet("""
+        QWidget {
+            background-color: #0f172a;
+            color: #e5e7eb;
+            font-family: Segoe UI, Arial, sans-serif;
+            font-size: 10pt;
+        }
+        QMainWindow {
+            background-color: #0f172a;
+        }
+        QLabel {
+            color: #e5e7eb;
+        }
+        QTabWidget::pane {
+            border: 1px solid #334155;
+            background: #111827;
+            border-radius: 8px;
+            top: -1px;
+        }
+        QTabBar::tab {
+            background: #1e293b;
+            color: #cbd5e1;
+            padding: 10px 18px;
+            border: 1px solid #334155;
+            border-bottom: none;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            min-width: 100px;
+        }
+        QTabBar::tab:selected {
+            background: #2563eb;
+            color: white;
+        }
+        QTabBar::tab:!selected {
+            margin-top: 4px;
+        }
+        QPushButton {
+            background-color: #1d4ed8;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 14px;
+            min-height: 34px;
+            font-weight: 600;
+        }
+        QPushButton:hover {
+            background-color: #2563eb;
+        }
+        QPushButton:pressed {
+            background-color: #1e40af;
+        }
+        QPushButton:disabled {
+            background-color: #475569;
+            color: #cbd5e1;
+        }
+        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+            background-color: #111827;
+            color: #e5e7eb;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 6px 8px;
+            min-height: 30px;
+        }
+        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+            border: 1px solid #60a5fa;
+        }
+        QComboBox::drop-down {
+            border: none;
+            width: 24px;
+        }
+        QScrollArea, QScrollArea QWidget {
+            background-color: #111827;
+        }
+        QCheckBox {
+            spacing: 8px;
+        }
+        QCheckBox::indicator {
+            width: 18px;
+            height: 18px;
+        }
+        QCheckBox::indicator:unchecked {
+            border: 1px solid #64748b;
+            background: #0f172a;
+            border-radius: 4px;
+        }
+        QCheckBox::indicator:checked {
+            border: 1px solid #2563eb;
+            background: #2563eb;
+            border-radius: 4px;
+        }
+        QFrame[card="true"], QGroupBox {
+            background-color: #111827;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            margin-top: 10px;
+            padding: 12px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 12px;
+            padding: 0 6px 0 6px;
+            color: #93c5fd;
+            font-weight: 700;
+        }
+    """)
+
+
+def style_toolbar(toolbar):
+    toolbar.setIconSize(QtCore.QSize(22, 22))
+    toolbar.setStyleSheet("""
+        QToolBar {
+            background: #1e293b;
+            border: 1px solid #475569;
+            border-radius: 8px;
+            spacing: 6px;
+            padding: 4px;
+        }
+        QToolButton {
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            padding: 6px;
+            margin: 1px;
+        }
+        QToolButton:hover {
+            background: #334155;
+        }
+        QToolButton:pressed {
+            background: #475569;
+        }
+        QLabel {
+            color: #e5e7eb;
+            background: transparent;
+        }
+    """)
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.fig, self.ax = create_plot()
+        self.canvas = FigureCanvas(self.fig)
+        self.toolbar = NavigationToolbar(self.canvas, self)
+
+
+class ModularJointUI(object):
+    def setupUi(self, win):
+        self.window = win
+        self.unit_mode = "Radians"
+        self.step_rad = 0.05
+        self.joint_count = 4
+        self.modules = make_default_modules(self.joint_count)
+        self.show_plot_axes = True
+        self.show_frame_axes = True
+        self.preview_mode = "Skeleton"
+
+        self.control_rows = []
+        self.structure_rows = []
+        self.config_rows = []
+
+        win.setWindowTitle("Robot Arm Studio")
+        win.resize(1560, 880)
+
+        central = QtWidgets.QWidget()
+        win.setCentralWidget(central)
+        self.root = QtWidgets.QVBoxLayout(central)
+        self.root.setSpacing(12)
+        self.root.setContentsMargins(14, 14, 14, 14)
+
+        title = QtWidgets.QLabel("Robot Arm Studio")
+        title_font = QtGui.QFont("Segoe UI", 18)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        self.root.addWidget(title)
+
+        top_group = QtWidgets.QGroupBox("Workspace")
+        top_layout = QtWidgets.QHBoxLayout(top_group)
+        top_layout.setSpacing(14)
+
+        count_lbl = QtWidgets.QLabel("Joint count")
+        self.countSpin = QtWidgets.QSpinBox()
+        self.countSpin.setRange(1, 8)
+        self.countSpin.setValue(self.joint_count)
+        self.countSpin.valueChanged.connect(self.change_joint_count)
+
+        unit_lbl = QtWidgets.QLabel("Angle units")
+        self.unitBox = QtWidgets.QComboBox()
+        self.unitBox.addItems(["Radians", "Degrees"])
+        self.unitBox.setCurrentText(self.unit_mode)
+        self.unitBox.currentTextChanged.connect(self.change_unit_mode)
+
+        step_lbl = QtWidgets.QLabel("Step size")
+        self.stepSpin = QtWidgets.QDoubleSpinBox()
+        self.stepSpin.setDecimals(3)
+        self.stepSpin.setRange(0.001, 360.0)
+        self.stepSpin.setSingleStep(0.01)
+        self.stepSpin.valueChanged.connect(self.change_step_size)
+
+        preview_lbl = QtWidgets.QLabel("Preview mode")
+        self.previewModeBox = QtWidgets.QComboBox()
+        self.previewModeBox.addItems(["Skeleton", "3D Model"])
+        self.previewModeBox.setCurrentText(self.preview_mode)
+        self.previewModeBox.currentTextChanged.connect(self.change_preview_mode)
+
+        self.stepUnitLbl = QtWidgets.QLabel()
+        self.plotAxesCheck = QtWidgets.QCheckBox("Show plot axes")
+        self.plotAxesCheck.setChecked(True)
+        self.plotAxesCheck.toggled.connect(self.toggle_plot_axes)
+
+        self.frameAxesCheck = QtWidgets.QCheckBox("Show frame axes")
+        self.frameAxesCheck.setChecked(True)
+        self.frameAxesCheck.toggled.connect(self.toggle_frame_axes)
+
+        self.posLbl = QtWidgets.QLabel("End-effector: X=0.000, Y=0.000, Z=0.000")
+
+        top_layout.addWidget(count_lbl)
+        top_layout.addWidget(self.countSpin)
+        top_layout.addWidget(unit_lbl)
+        top_layout.addWidget(self.unitBox)
+        top_layout.addWidget(step_lbl)
+        top_layout.addWidget(self.stepSpin)
+        top_layout.addWidget(self.stepUnitLbl)
+        top_layout.addWidget(preview_lbl)
+        top_layout.addWidget(self.previewModeBox)
+        top_layout.addWidget(self.plotAxesCheck)
+        top_layout.addWidget(self.frameAxesCheck)
+        top_layout.addStretch()
+        top_layout.addWidget(self.posLbl)
+
+        self.root.addWidget(top_group)
+
+        self.tabs = QtWidgets.QTabWidget()
+        self.root.addWidget(self.tabs)
+
+        self.icon_up = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, "up.png")))
+        self.icon_down = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, "down.png")))
+
+        style_toolbar(self.window.toolbar)
+
+        self.rebuild_tabs()
+        self.refresh_step_spin()
+        self.plot_data()
+
+    def angle_to_display(self, rad_value):
+        return math.degrees(rad_value) if self.unit_mode == "Degrees" else rad_value
+
+    def angle_from_display(self, shown_value):
+        return math.radians(shown_value) if self.unit_mode == "Degrees" else shown_value
+
+    def angle_unit_short(self):
+        return "deg" if self.unit_mode == "Degrees" else "rad"
+
+    def format_angle(self, rad_value, decimals=3):
+        return f"{self.angle_to_display(rad_value):.{decimals}f}"
+
+    def refresh_step_spin(self):
+        self.stepSpin.blockSignals(True)
+        if self.unit_mode == "Degrees":
+            self.stepSpin.setDecimals(2)
+            self.stepSpin.setRange(0.01, 360.0)
+            self.stepSpin.setSingleStep(1.0)
+            self.stepSpin.setValue(math.degrees(self.step_rad))
+        else:
+            self.stepSpin.setDecimals(3)
+            self.stepSpin.setRange(0.001, 6.283)
+            self.stepSpin.setSingleStep(0.01)
+            self.stepSpin.setValue(self.step_rad)
+        self.stepSpin.blockSignals(False)
+        self.stepUnitLbl.setText(self.angle_unit_short())
+
+    def toggle_plot_axes(self, checked):
+        self.show_plot_axes = checked
+        self.plot_data()
+
+    def toggle_frame_axes(self, checked):
+        self.show_frame_axes = checked
+        self.plot_data()
+
+    def change_preview_mode(self, mode):
+        self.preview_mode = mode
+        self.plot_data()
+
+    def rebuild_tabs(self):
+        self.tabs.clear()
+        self.control_rows = []
+        self.structure_rows = []
+        self.config_rows = []
+
+        self.build_control_tab()
+        self.build_structure_tab()
+        self.build_config_tab()
+
+        self.refresh_headers()
+        self.refresh_all_control_rows()
+        self.refresh_structure_fields()
+        self.refresh_config_fields()
+
+    def change_joint_count(self, new_count):
+        old_modules = self.modules
+        self.joint_count = new_count
+        new_modules = make_default_modules(new_count)
+
+        old_joint_map = {m["name"]: m for m in old_modules}
+        for m in new_modules:
+            if m["name"] in old_joint_map:
+                old = old_joint_map[m["name"]]
+                m["type"] = old["type"]
+                m["axis"] = old["axis"]
+                m["offset"] = old["offset"].copy()
+                m["link"] = old["link"].copy()
+                m["q"] = old["q"]
+                m["home_q"] = old["home_q"]
+                m["qlim"] = old["qlim"]
+                m["fixed"] = old["fixed"]
+
+        self.modules = new_modules
+        self.rebuild_tabs()
+        self.plot_data()
+
+    def change_step_size(self, shown_value):
+        self.step_rad = self.angle_from_display(shown_value)
+        self.refresh_headers()
+
+    def change_unit_mode(self, new_unit):
+        self.unit_mode = new_unit
+        self.refresh_step_spin()
+        self.refresh_headers()
+        self.refresh_all_control_rows()
+        self.refresh_config_fields()
+
+    def refresh_headers(self):
+        self.control_angle_header.setText(f"Angle ({self.angle_unit_short()})")
+        self.config_min_header.setText(f"Min ({self.angle_unit_short()})")
+        self.config_max_header.setText(f"Max ({self.angle_unit_short()})")
+        self.config_home_header.setText(f"Home ({self.angle_unit_short()})")
+        self.help_lbl.setText(
+            f"Choose the number of joints at the top. The Structure tab shows joints and links in sequence.\n"
+            f"Link presets are 4 in, 6 in, and 8 in; the robot model uses meters internally.\n"
+            f"Preview mode can be a fast skeleton or an improved stylized 3D solid model.\n"
+            f"The 3D view stays cubic and scales to about 1.5 times the robot span."
+        )
+
+    def make_card(self):
+        w = QtWidgets.QFrame()
+        w.setProperty("card", True)
+        return w
+
+    def build_control_tab(self):
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(tab)
+        layout.setSpacing(12)
+
+        left_card = self.make_card()
+        left_layout = QtWidgets.QVBoxLayout(left_card)
+
+        subtitle = QtWidgets.QLabel("Joint Control")
+        subtitle_font = QtGui.QFont("Segoe UI", 12)
+        subtitle_font.setBold(True)
+        subtitle.setFont(subtitle_font)
+        left_layout.addWidget(subtitle)
+
+        grid_wrap = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(grid_wrap)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        headers = ["Joint", "Type", "Axis", "Down", None, "Up", "Servo"]
+        for c, text in enumerate(headers):
+            lbl = QtWidgets.QLabel("" if text is None else text)
+            lbl.setStyleSheet("color: #93c5fd; font-weight: 700;")
+            grid.addWidget(lbl, 0, c)
+            if c == 4:
+                self.control_angle_header = lbl
+
+        for i, m in enumerate(self.modules, start=1):
+            name_lbl = QtWidgets.QLabel(m["name"])
+            type_lbl = QtWidgets.QLabel(m["type"])
+            axis_lbl = QtWidgets.QLabel(m["axis"].upper())
+
+            down_btn = QtWidgets.QPushButton()
+            down_btn.setIcon(self.icon_down)
+            down_btn.setIconSize(QtCore.QSize(24, 24))
+            down_btn.setFixedSize(42, 42)
+
+            angle_lbl = QtWidgets.QLabel()
+            angle_lbl.setFrameShape(QtWidgets.QFrame.Box)
+            angle_lbl.setAlignment(QtCore.Qt.AlignCenter)
+            angle_lbl.setMinimumWidth(95)
+            angle_lbl.setMinimumHeight(36)
+            angle_lbl.setStyleSheet("border: 1px solid #334155; border-radius: 8px; background: #0b1220;")
+
+            up_btn = QtWidgets.QPushButton()
+            up_btn.setIcon(self.icon_up)
+            up_btn.setIconSize(QtCore.QSize(24, 24))
+            up_btn.setFixedSize(42, 42)
+
+            aux_lbl = QtWidgets.QLabel()
+            aux_lbl.setAlignment(QtCore.Qt.AlignCenter)
+            aux_lbl.setMinimumWidth(90)
+
+            if not m["fixed"]:
+                down_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, -self.step_rad))
+                up_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, self.step_rad))
+            else:
+                down_btn.setEnabled(False)
+                up_btn.setEnabled(False)
+
+            widgets = [name_lbl, type_lbl, axis_lbl, down_btn, angle_lbl, up_btn, aux_lbl]
+            for c, w in enumerate(widgets):
+                grid.addWidget(w, i, c)
+
+            self.control_rows.append({
+                "type_lbl": type_lbl,
+                "axis_lbl": axis_lbl,
+                "down_btn": down_btn,
+                "angle_lbl": angle_lbl,
+                "up_btn": up_btn,
+                "aux_lbl": aux_lbl,
+            })
+
+        left_layout.addWidget(grid_wrap)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.resetBtn = QtWidgets.QPushButton("Reset Angles")
+        self.resetBtn.clicked.connect(self.reset_angles)
+        btn_row.addWidget(self.resetBtn)
+
+        self.sendBtn = QtWidgets.QPushButton("Send")
+        self.sendBtn.clicked.connect(self.send)
+        btn_row.addWidget(self.sendBtn)
+        btn_row.addStretch()
+        left_layout.addLayout(btn_row)
+
+        right_card = self.make_card()
+        right_layout = QtWidgets.QVBoxLayout(right_card)
+
+        plot_title = QtWidgets.QLabel("3D Preview")
+        plot_title.setFont(subtitle_font)
+        right_layout.addWidget(plot_title)
+
+        plot_info = QtWidgets.QLabel(
+            "Switch between Skeleton and 3D Model mode. The plot and toolbar are styled to match the app theme."
+        )
+        plot_info.setWordWrap(True)
+        plot_info.setStyleSheet("color: #cbd5e1;")
+        right_layout.addWidget(plot_info)
+
+        right_layout.addWidget(self.window.toolbar)
+        self.window.canvas.setMinimumHeight(520)
+        self.window.canvas.setStyleSheet("background: #0b1220; border: 1px solid #334155; border-radius: 8px;")
+        right_layout.addWidget(self.window.canvas, 1)
+
+        layout.addWidget(left_card, 3)
+        layout.addWidget(right_card, 2)
+
+        self.tabs.addTab(tab, "Control")
+
+    def build_structure_tab(self):
+        tab = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(tab)
+
+        card = self.make_card()
+        card_layout = QtWidgets.QVBoxLayout(card)
+
+        info_lbl = QtWidgets.QLabel(
+            "Quick structure editor: choose each joint type, and each link length between joints."
+        )
+        info_lbl.setWordWrap(True)
+        card_layout.addWidget(info_lbl)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        content = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(content)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        hdr0 = QtWidgets.QLabel("Item")
+        hdr1 = QtWidgets.QLabel("Setting")
+        hdr0.setStyleSheet("color: #93c5fd; font-weight: 700;")
+        hdr1.setStyleSheet("color: #93c5fd; font-weight: 700;")
+        grid.addWidget(hdr0, 0, 0)
+        grid.addWidget(hdr1, 0, 1)
+
+        row_idx = 1
+        joint_modules = self.modules[:-1] if self.modules and self.modules[-1]["name"] == "GRIP" else self.modules
+
+        for i, m in enumerate(joint_modules):
+            joint_lbl = QtWidgets.QLabel(m["name"])
+            type_box = QtWidgets.QComboBox()
+            type_box.addItems(["none", "swivel", "rotation"])
+            type_box.setCurrentText(m["type"])
+
+            grid.addWidget(joint_lbl, row_idx, 0)
+            grid.addWidget(type_box, row_idx, 1)
+
+            self.structure_rows.append({
+                "kind": "joint",
+                "module_index": i,
+                "type_box": type_box,
+            })
+            row_idx += 1
+
+            if i < len(joint_modules) - 1:
+                link_lbl = QtWidgets.QLabel(f"L{i+1}")
+                link_box = QtWidgets.QComboBox()
+                link_box.addItems([f"{v} in" for v in LINK_PRESETS_IN])
+                link_box.setMinimumContentsLength(6)
+
+                grid.addWidget(link_lbl, row_idx, 0)
+                grid.addWidget(link_box, row_idx, 1)
+
+                self.structure_rows.append({
+                    "kind": "link",
+                    "module_index": i,
+                    "link_box": link_box,
+                })
+                row_idx += 1
+
+        scroll.setWidget(content)
+        card_layout.addWidget(scroll)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.applyStructureBtn = QtWidgets.QPushButton("Apply Structure")
+        self.applyStructureBtn.clicked.connect(self.apply_structure)
+        btn_row.addWidget(self.applyStructureBtn)
+        btn_row.addStretch()
+        card_layout.addLayout(btn_row)
+
+        outer.addWidget(card)
+        self.tabs.addTab(tab, "Structure")
+
+    def build_config_tab(self):
+        tab = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(tab)
+
+        card = self.make_card()
+        card_layout = QtWidgets.QVBoxLayout(card)
+
+        self.help_lbl = QtWidgets.QLabel("")
+        self.help_lbl.setWordWrap(True)
+        card_layout.addWidget(self.help_lbl)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        content = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(content)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        headers = ["Joint", "Type", "Axis", "Offset X", "Offset Y", "Offset Z", "Link X", "Link Y", "Link Z", None, None, None]
+        for c, text in enumerate(headers):
+            lbl = QtWidgets.QLabel("" if text is None else text)
+            lbl.setStyleSheet("color: #93c5fd; font-weight: 700;")
+            grid.addWidget(lbl, 0, c)
+            if c == 9:
+                self.config_min_header = lbl
+            elif c == 10:
+                self.config_max_header = lbl
+            elif c == 11:
+                self.config_home_header = lbl
+
+        for i, m in enumerate(self.modules, start=1):
+            name_lbl = QtWidgets.QLabel(m["name"])
+
+            type_box = QtWidgets.QComboBox()
+            type_box.addItems(["none", "swivel", "rotation"])
+            type_box.setCurrentText(m["type"])
+
+            axis_box = QtWidgets.QComboBox()
+            axis_box.addItems(["x", "y", "z"])
+            axis_box.setCurrentText(m["axis"])
+
+            ox = QtWidgets.QLineEdit(str(m["offset"][0]))
+            oy = QtWidgets.QLineEdit(str(m["offset"][1]))
+            oz = QtWidgets.QLineEdit(str(m["offset"][2]))
+            lx = QtWidgets.QLineEdit(str(m["link"][0]))
+            ly = QtWidgets.QLineEdit(str(m["link"][1]))
+            lz = QtWidgets.QLineEdit(str(m["link"][2]))
+            qmin_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][0]))
+            qmax_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][1]))
+            home_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["home_q"]))
+
+            widgets = [name_lbl, type_box, axis_box, ox, oy, oz, lx, ly, lz, qmin_edit, qmax_edit, home_edit]
+            for c, w in enumerate(widgets):
+                if hasattr(w, "setMinimumWidth"):
+                    w.setMinimumWidth(72)
+                grid.addWidget(w, i, c)
+
+            if m["fixed"]:
+                type_box.setEnabled(False)
+                axis_box.setEnabled(False)
+                qmin_edit.setEnabled(False)
+                qmax_edit.setEnabled(False)
+                home_edit.setEnabled(False)
+
+            self.config_rows.append({
+                "type_box": type_box,
+                "axis_box": axis_box,
+                "ox": ox, "oy": oy, "oz": oz,
+                "lx": lx, "ly": ly, "lz": lz,
+                "qmin_edit": qmin_edit,
+                "qmax_edit": qmax_edit,
+                "home_edit": home_edit,
+            })
+
+        scroll.setWidget(content)
+        card_layout.addWidget(scroll)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.applyBtn = QtWidgets.QPushButton("Apply Geometry")
+        self.applyBtn.clicked.connect(self.apply_geometry)
+        btn_row.addWidget(self.applyBtn)
+
+        self.homeBtn = QtWidgets.QPushButton("Go Home")
+        self.homeBtn.clicked.connect(self.go_home)
+        btn_row.addWidget(self.homeBtn)
+
+        btn_row.addStretch()
+        card_layout.addLayout(btn_row)
+
+        outer.addWidget(card)
+        self.tabs.addTab(tab, "Configure Robot")
+
+    def refresh_structure_fields(self):
+        for row in self.structure_rows:
+            if row["kind"] == "joint":
+                m = self.modules[row["module_index"]]
+                row["type_box"].setCurrentText(m["type"])
+            elif row["kind"] == "link":
+                m = self.modules[row["module_index"]]
+                row["link_box"].setCurrentText(nearest_link_preset_text(float(np.linalg.norm(m["link"]))))
+
+    def refresh_config_fields(self):
+        for i, m in enumerate(self.modules):
+            row = self.config_rows[i]
+            row["type_box"].setCurrentText(m["type"])
+            row["axis_box"].setCurrentText(m["axis"])
+            row["ox"].setText(str(m["offset"][0]))
+            row["oy"].setText(str(m["offset"][1]))
+            row["oz"].setText(str(m["offset"][2]))
+            row["lx"].setText(str(m["link"][0]))
+            row["ly"].setText(str(m["link"][1]))
+            row["lz"].setText(str(m["link"][2]))
+            if not m["fixed"]:
+                row["qmin_edit"].setText(self.format_angle(m["qlim"][0]))
+                row["qmax_edit"].setText(self.format_angle(m["qlim"][1]))
+                row["home_edit"].setText(self.format_angle(m["home_q"]))
+
+    def apply_structure(self):
+        try:
+            for row in self.structure_rows:
+                if row["kind"] == "joint":
+                    m = self.modules[row["module_index"]]
+                    if m["fixed"]:
+                        continue
+
+                    new_type = row["type_box"].currentText()
+                    m["type"] = new_type
+
+                    if new_type == "none":
+                        m["q"] = 0.0
+                        m["home_q"] = 0.0
+                        m["qlim"] = (0.0, 0.0)
+                    else:
+                        meta = JOINT_TYPES[new_type]
+                        if m["qlim"] == (0.0, 0.0):
+                            m["qlim"] = meta["default_limits"]
+
+                        if m["name"] == "J1":
+                            m["axis"] = "z"
+                        elif new_type == "rotation":
+                            m["axis"] = "y"
+                        elif new_type == "swivel":
+                            m["axis"] = "z"
+
+                elif row["kind"] == "link":
+                    m = self.modules[row["module_index"]]
+                    selected = row["link_box"].currentText()
+                    link_len = LINK_PRESETS_M[selected]
+
+                    old_norm = float(np.linalg.norm(m["link"]))
+                    if old_norm < 1e-9:
+                        m["link"] = np.array([0.0, 0.0, link_len], dtype=float)
+                    else:
+                        m["link"] = (m["link"] / old_norm) * link_len
+
+            self.refresh_all_control_rows()
+            self.refresh_structure_fields()
+            self.refresh_config_fields()
+            self.plot_data()
+
+        except Exception as e:
+            print("Apply structure error:", e)
+
+    def change_angle(self, idx, delta_rad):
+        m = self.modules[idx]
+        if m["fixed"] or m["type"] == "none":
+            return
+        qmin, qmax = m["qlim"]
+        m["q"] = max(qmin, min(qmax, round(m["q"] + delta_rad, 6)))
+        self.refresh_control_row(idx)
+        self.plot_data()
+
+    def refresh_control_row(self, idx):
+        m = self.modules[idx]
+        row = self.control_rows[idx]
+        row["type_lbl"].setText(m["type"])
+        row["axis_lbl"].setText(m["axis"].upper())
+
+        if m["fixed"]:
+            row["angle_lbl"].setText("fixed")
+            servo_deg = joint_to_servo_deg(m["name"], m["q"])
+            row["aux_lbl"].setText("-" if servo_deg is None else f"{servo_deg:.1f}")
+            row["down_btn"].setEnabled(False)
+            row["up_btn"].setEnabled(False)
+        elif m["type"] == "none":
+            row["angle_lbl"].setText("unused")
+            row["aux_lbl"].setText("-")
+            row["down_btn"].setEnabled(False)
+            row["up_btn"].setEnabled(False)
+        else:
+            row["angle_lbl"].setText(f"{self.angle_to_display(m['q']):.2f}")
+            servo_deg = joint_to_servo_deg(m["name"], m["q"])
+            row["aux_lbl"].setText("-" if servo_deg is None else f"{servo_deg:.1f}")
+            row["down_btn"].setEnabled(True)
+            row["up_btn"].setEnabled(True)
+
+    def refresh_all_control_rows(self):
+        for i in range(len(self.modules)):
+            self.refresh_control_row(i)
+
+    def apply_geometry(self):
+        try:
+            for i, m in enumerate(self.modules):
+                row = self.config_rows[i]
+                mtype = row["type_box"].currentText()
+                m["type"] = mtype
+                m["axis"] = row["axis_box"].currentText()
+                m["offset"] = np.array([
+                    float(row["ox"].text()),
+                    float(row["oy"].text()),
+                    float(row["oz"].text())
+                ], dtype=float)
+                m["link"] = np.array([
+                    float(row["lx"].text()),
+                    float(row["ly"].text()),
+                    float(row["lz"].text())
+                ], dtype=float)
+
+                if m["type"] == "none":
+                    m["q"] = 0.0
+                    m["home_q"] = 0.0
+                    m["qlim"] = (0.0, 0.0)
+                elif not m["fixed"]:
+                    qmin = self.angle_from_display(float(row["qmin_edit"].text()))
+                    qmax = self.angle_from_display(float(row["qmax_edit"].text()))
+                    home_q = self.angle_from_display(float(row["home_edit"].text()))
+                    if qmin > qmax:
+                        qmin, qmax = qmax, qmin
+                    m["qlim"] = (qmin, qmax)
+                    m["home_q"] = max(qmin, min(qmax, home_q))
+                    m["q"] = max(qmin, min(qmax, m["q"]))
+
+            self.refresh_all_control_rows()
+            self.refresh_structure_fields()
+            self.refresh_config_fields()
+            self.plot_data()
+        except Exception as e:
+            print("Apply geometry error:", e)
+
+    def go_home(self):
+        for m in self.modules:
+            if not m["fixed"] and m["type"] != "none":
+                qmin, qmax = m["qlim"]
+                m["q"] = max(qmin, min(qmax, m["home_q"]))
+        self.refresh_all_control_rows()
+        self.plot_data()
+
+    def reset_angles(self):
+        for m in self.modules:
+            if not m["fixed"] and m["type"] != "none":
+                m["q"] = 0.0
+        self.refresh_all_control_rows()
+        self.plot_data()
+
+    def send(self):
+        try:
+            values = []
+            for m in self.modules:
+                if m["fixed"] or m["type"] == "none":
+                    continue
+                servo_deg = joint_to_servo_deg(m["name"], m["q"])
+                if servo_deg is not None:
+                    values.append(servo_deg)
+            data = ",".join(f"{v:.1f}" for v in values)
+            print("SEND:", data)
+        except Exception as e:
+            print("Send error:", e)
+
+    def plot_data(self):
+        try:
+            X, Y, Z, pts, point_names, frames = forward_kin(self.modules)
+
+            if hasattr(self.window, "ax"):
+                self.window.ax.cla()
+                style_3d_axes(self.window.ax, show_plot_axes=self.show_plot_axes)
+
+                if self.preview_mode == "3D Model":
+                    draw_robot_model(self.window.ax, pts, frames)
+                    self.window.ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='#f87171', s=50)
+                else:
+                    self.window.ax.plot(X, Y, Z, color='#60a5fa', marker='o', linewidth=2.5, markersize=5, label='Arm')
+                    self.window.ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='#f87171', s=90, label='End-effector')
+                    draw_frame_axes(self.window.ax, frames, show_axes_frames=self.show_frame_axes)
+
+                if self.preview_mode == "Skeleton":
+                    for i, (x, y, z) in enumerate(pts):
+                        self.window.ax.text(x, y, z + 0.02, point_names[i], fontsize=9, color='#e5e7eb')
+                else:
+                    self.window.ax.text(pts[0][0], pts[0][1], pts[0][2] + 0.03, "BASE", fontsize=9, color='#e5e7eb')
+                    self.window.ax.text(pts[-1][0], pts[-1][1], pts[-1][2] + 0.03, "GRIP", fontsize=9, color='#e5e7eb')
+
+                auto_fit_axes_cube(self.window.ax, X, Y, Z, scale=1.5, min_cube=0.4)
+                self.window.ax.view_init(elev=22, azim=-58)
+
+                if self.preview_mode == "Skeleton":
+                    leg = self.window.ax.legend(facecolor="#111827", edgecolor="#475569")
+                    for txt in leg.get_texts():
+                        txt.set_color("#e5e7eb")
+
+                self.window.fig.tight_layout()
+                self.window.canvas.draw()
+
+                self.posLbl.setText(f"End-effector: X={X[-1]:.3f}, Y={Y[-1]:.3f}, Z={Z[-1]:.3f}")
+        except Exception as e:
+            print("Plot error:", e)
+
+
+def main():
+    app = QtWidgets.QApplication(sys.argv)
+    apply_app_style(app)
+    win = MainWindow()
+    ui = ModularJointUI()
+    ui.setupUi(win)
+    win.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
