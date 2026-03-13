@@ -245,6 +245,18 @@ def forward_kin(modules):
     return X, Y, Z, joint_pts, point_names, frames
 
 
+def wrap_to_pi(angle):
+    return (angle + math.pi) % (2 * math.pi) - math.pi
+
+
+def get_end_effector_yaw(frames):
+    if not frames:
+        return 0.0
+    ee = frames[-1]
+    x_axis = ee["x_axis"]
+    return math.atan2(float(x_axis[1]), float(x_axis[0]))
+
+
 def unit_vector(v):
     n = np.linalg.norm(v)
     if n < 1e-9:
@@ -462,6 +474,162 @@ def draw_frame_axes(ax, frames, show_axes_frames=True, axis_len=0.04):
         ax.quiver(o[0], o[1], o[2], z[0], z[1], z[2], length=axis_len, normalize=True, color='#3b82f6')
 
 
+def geometric_world_ik(modules, target_xyz, target_yaw, reach_tolerance=0.015, elbow_up=True):
+    if len(modules) < 3:
+        return False, "Need at least J1, J2, and J3 for geometric IK."
+
+    if modules[0]["fixed"] or modules[0]["type"] == "none" or modules[0]["axis"].lower() != "z":
+        return False, "Geometric IK expects J1 to be an active swivel about Z."
+
+    pitch_ids = []
+    for i in range(1, len(modules)):
+        m = modules[i]
+        if m["fixed"] or m["type"] == "none":
+            continue
+        if m["axis"].lower() == "y":
+            pitch_ids.append(i)
+
+    if len(pitch_ids) < 2:
+        return False, "Geometric IK expects at least two active Y-axis joints after J1."
+
+    base = modules[0]
+    q1 = math.atan2(target_xyz[1], target_xyz[0])
+    q1 = clamp(q1, base["qlim"][0], base["qlim"][1])
+
+    r = math.hypot(target_xyz[0], target_xyz[1])
+    z = target_xyz[2]
+
+    base_height = float(base["link"][2] + base["offset"][2])
+    pr = r
+    pz = z - base_height
+
+    l1 = float(np.linalg.norm(modules[pitch_ids[0]]["link"]))
+    l2 = float(np.linalg.norm(modules[pitch_ids[1]]["link"]))
+
+    extra_pitch_ids = pitch_ids[2:]
+    extra_len = sum(float(np.linalg.norm(modules[j]["link"])) for j in extra_pitch_ids)
+
+    wrist_r = pr
+    wrist_z = pz
+
+    if extra_len > 1e-9:
+        wrist_r = pr - extra_len
+        wrist_z = pz
+
+    d = math.hypot(wrist_r, wrist_z)
+    d = clamp(d, abs(l1 - l2) + 1e-6, l1 + l2 - 1e-6)
+
+    cos_q3 = (d * d - l1 * l1 - l2 * l2) / (2.0 * l1 * l2)
+    cos_q3 = clamp(cos_q3, -1.0, 1.0)
+
+    q3_mag = math.acos(cos_q3)
+    q3 = -q3_mag if elbow_up else q3_mag
+
+    phi = math.atan2(wrist_z, wrist_r)
+    psi = math.atan2(l2 * math.sin(q3), l1 + l2 * math.cos(q3))
+    q2 = phi - psi
+
+    candidate_q = [m["q"] for m in modules]
+    candidate_q[0] = q1
+    candidate_q[pitch_ids[0]] = q2
+    candidate_q[pitch_ids[1]] = q3
+
+    for j in extra_pitch_ids:
+        candidate_q[j] = 0.0
+
+    for j in extra_pitch_ids:
+        candidate_q[j] = clamp(candidate_q[j], modules[j]["qlim"][0], modules[j]["qlim"][1])
+
+    desired_pitch_sum = 0.0
+    used_pitch_sum = candidate_q[pitch_ids[0]] + candidate_q[pitch_ids[1]]
+    residual_pitch = desired_pitch_sum - used_pitch_sum
+
+    if len(extra_pitch_ids) > 0:
+        share = residual_pitch / len(extra_pitch_ids)
+        for j in extra_pitch_ids:
+            candidate_q[j] = clamp(share, modules[j]["qlim"][0], modules[j]["qlim"][1])
+
+    yaw_candidates = []
+    for i, m in enumerate(modules):
+        if m["fixed"] or m["type"] == "none":
+            continue
+        if m["axis"].lower() == "z":
+            yaw_candidates.append(i)
+
+    if yaw_candidates:
+        yaw_after_base = wrap_to_pi(target_yaw - q1)
+        secondary = [j for j in yaw_candidates if j != 0]
+        if secondary:
+            share = yaw_after_base / len(secondary)
+            for j in secondary:
+                candidate_q[j] = clamp(share, modules[j]["qlim"][0], modules[j]["qlim"][1])
+
+    for i, m in enumerate(modules):
+        if m["fixed"] or m["type"] == "none":
+            continue
+        qmin, qmax = m["qlim"]
+        candidate_q[i] = clamp(candidate_q[i], qmin, qmax)
+
+    old_q = [m["q"] for m in modules]
+    for i, q in enumerate(candidate_q):
+        modules[i]["q"] = q
+
+    X, Y, Z, pts, names, frames = forward_kin(modules)
+    actual = np.array([X[-1], Y[-1], Z[-1]], dtype=float)
+    pos_err = np.linalg.norm(target_xyz - actual)
+
+    if pos_err > reach_tolerance:
+        for i, q in enumerate(old_q):
+            modules[i]["q"] = q
+        return False, f"Target not reached. Error {pos_err:.3f} m exceeds tolerance {reach_tolerance:.3f} m."
+
+    return True, f"Target reached. Error {pos_err:.3f} m."
+
+
+def solve_world_geometric(modules, target_xyz, target_yaw, reach_tolerance=0.015):
+    old_q = [m["q"] for m in modules]
+
+    ok1, msg1 = geometric_world_ik(
+        modules, target_xyz, target_yaw,
+        reach_tolerance=reach_tolerance, elbow_up=True
+    )
+    if ok1:
+        q_up = [m["q"] for m in modules]
+        X, Y, Z, pts, names, frames = forward_kin(modules)
+        err_up = np.linalg.norm(target_xyz - np.array([X[-1], Y[-1], Z[-1]], dtype=float))
+    else:
+        q_up = None
+        err_up = 1e9
+
+    for i, q in enumerate(old_q):
+        modules[i]["q"] = q
+
+    ok2, msg2 = geometric_world_ik(
+        modules, target_xyz, target_yaw,
+        reach_tolerance=reach_tolerance, elbow_up=False
+    )
+    if ok2:
+        q_down = [m["q"] for m in modules]
+        X, Y, Z, pts, names, frames = forward_kin(modules)
+        err_down = np.linalg.norm(target_xyz - np.array([X[-1], Y[-1], Z[-1]], dtype=float))
+    else:
+        q_down = None
+        err_down = 1e9
+
+    if q_up is None and q_down is None:
+        for i, q in enumerate(old_q):
+            modules[i]["q"] = q
+        return False, "Target unreachable for current geometry or tolerance."
+
+    chosen = q_up if err_up <= err_down else q_down
+
+    for i, q in enumerate(chosen):
+        modules[i]["q"] = q
+
+    X, Y, Z, pts, names, frames = forward_kin(modules)
+    err = np.linalg.norm(target_xyz - np.array([X[-1], Y[-1], Z[-1]], dtype=float))
+    return True, f"Target reached. Error {err:.3f} m."
+
 def apply_app_style(app):
     app.setStyle("Fusion")
     app.setStyleSheet("""
@@ -619,13 +787,19 @@ class ModularJointUI(object):
         self.show_plot_axes = True
         self.show_frame_axes = True
         self.preview_mode = "Skeleton"
+        self.control_mode = "Joint"
+        self.world_target = np.array([0.0, 0.0, 0.0], dtype=float)
+        self.world_yaw = 0.0
+        self.world_step_pos = 0.01
+        self.world_step_yaw = math.radians(3.0)
+        self.world_reach_tolerance = 0.015
 
         self.control_rows = []
         self.structure_rows = []
         self.config_rows = []
 
         win.setWindowTitle("Robot Arm Studio")
-        win.resize(1560, 880)
+        win.resize(1600, 900)
 
         central = QtWidgets.QWidget()
         win.setCentralWidget(central)
@@ -668,6 +842,12 @@ class ModularJointUI(object):
         self.previewModeBox.setCurrentText(self.preview_mode)
         self.previewModeBox.currentTextChanged.connect(self.change_preview_mode)
 
+        mode_lbl = QtWidgets.QLabel("Control mode")
+        self.controlModeBox = QtWidgets.QComboBox()
+        self.controlModeBox.addItems(["Joint", "World"])
+        self.controlModeBox.setCurrentText(self.control_mode)
+        self.controlModeBox.currentTextChanged.connect(self.change_control_mode)
+
         self.stepUnitLbl = QtWidgets.QLabel()
         self.plotAxesCheck = QtWidgets.QCheckBox("Show plot axes")
         self.plotAxesCheck.setChecked(True)
@@ -688,6 +868,8 @@ class ModularJointUI(object):
         top_layout.addWidget(self.stepUnitLbl)
         top_layout.addWidget(preview_lbl)
         top_layout.addWidget(self.previewModeBox)
+        top_layout.addWidget(mode_lbl)
+        top_layout.addWidget(self.controlModeBox)
         top_layout.addWidget(self.plotAxesCheck)
         top_layout.addWidget(self.frameAxesCheck)
         top_layout.addStretch()
@@ -705,6 +887,7 @@ class ModularJointUI(object):
 
         self.rebuild_tabs()
         self.refresh_step_spin()
+        self.sync_world_target_to_current()
         self.plot_data()
 
     def angle_to_display(self, rad_value):
@@ -746,6 +929,10 @@ class ModularJointUI(object):
         self.preview_mode = mode
         self.plot_data()
 
+    def change_control_mode(self, mode):
+        self.control_mode = mode
+        self.refresh_control_mode_ui()
+
     def rebuild_tabs(self):
         self.tabs.clear()
         self.control_rows = []
@@ -760,6 +947,8 @@ class ModularJointUI(object):
         self.refresh_all_control_rows()
         self.refresh_structure_fields()
         self.refresh_config_fields()
+        self.refresh_world_fields()
+        self.refresh_control_mode_ui()
 
     def change_joint_count(self, new_count):
         old_modules = self.modules
@@ -781,6 +970,7 @@ class ModularJointUI(object):
 
         self.modules = new_modules
         self.rebuild_tabs()
+        self.sync_world_target_to_current()
         self.plot_data()
 
     def change_step_size(self, shown_value):
@@ -803,6 +993,8 @@ class ModularJointUI(object):
             f"Choose the number of joints at the top. The Structure tab shows joints and links in sequence.\n"
             f"Link presets are 4 in, 6 in, and 8 in; the robot model uses meters internally.\n"
             f"Preview mode can be a fast skeleton or an improved stylized 3D solid model.\n"
+            f"World control uses a geometric IK intended for a base swivel plus pitch-chain arm.\n"
+            f"The target tolerance field sets how close the end-effector must be to count as reached.\n"
             f"The 3D view stays cubic and scales to about 1.5 times the robot span."
         )
 
@@ -886,6 +1078,89 @@ class ModularJointUI(object):
 
         left_layout.addWidget(grid_wrap)
 
+        self.worldGroup = QtWidgets.QGroupBox("World Control")
+        world_layout = QtWidgets.QGridLayout(self.worldGroup)
+        world_layout.setHorizontalSpacing(10)
+        world_layout.setVerticalSpacing(8)
+
+        self.worldStatusLbl = QtWidgets.QLabel("Move the end-effector in world X, Y, Z and swivel yaw.")
+        self.worldStatusLbl.setWordWrap(True)
+        world_layout.addWidget(self.worldStatusLbl, 0, 0, 1, 6)
+
+        world_layout.addWidget(QtWidgets.QLabel("X (m)"), 1, 0)
+        self.worldXEdit = QtWidgets.QDoubleSpinBox()
+        self.worldXEdit.setDecimals(3)
+        self.worldXEdit.setRange(-2.0, 2.0)
+        self.worldXEdit.setSingleStep(0.01)
+        world_layout.addWidget(self.worldXEdit, 1, 1)
+
+        world_layout.addWidget(QtWidgets.QLabel("Y (m)"), 1, 2)
+        self.worldYEdit = QtWidgets.QDoubleSpinBox()
+        self.worldYEdit.setDecimals(3)
+        self.worldYEdit.setRange(-2.0, 2.0)
+        self.worldYEdit.setSingleStep(0.01)
+        world_layout.addWidget(self.worldYEdit, 1, 3)
+
+        world_layout.addWidget(QtWidgets.QLabel("Z (m)"), 1, 4)
+        self.worldZEdit = QtWidgets.QDoubleSpinBox()
+        self.worldZEdit.setDecimals(3)
+        self.worldZEdit.setRange(0.0, 2.5)
+        self.worldZEdit.setSingleStep(0.01)
+        world_layout.addWidget(self.worldZEdit, 1, 5)
+
+        world_layout.addWidget(QtWidgets.QLabel("Yaw (deg)"), 2, 0)
+        self.worldYawEdit = QtWidgets.QDoubleSpinBox()
+        self.worldYawEdit.setDecimals(1)
+        self.worldYawEdit.setRange(-180.0, 180.0)
+        self.worldYawEdit.setSingleStep(3.0)
+        world_layout.addWidget(self.worldYawEdit, 2, 1)
+
+        self.worldSyncBtn = QtWidgets.QPushButton("Use Current Pose")
+        self.worldSyncBtn.clicked.connect(self.sync_world_target_to_current)
+        world_layout.addWidget(self.worldSyncBtn, 2, 2)
+
+        self.worldGoBtn = QtWidgets.QPushButton("Move To Target")
+        self.worldGoBtn.clicked.connect(self.move_world_target_absolute)
+        world_layout.addWidget(self.worldGoBtn, 2, 3)
+
+        world_layout.addWidget(QtWidgets.QLabel("World step (m)"), 2, 4)
+        self.worldStepPosEdit = QtWidgets.QDoubleSpinBox()
+        self.worldStepPosEdit.setDecimals(3)
+        self.worldStepPosEdit.setRange(0.001, 0.200)
+        self.worldStepPosEdit.setValue(0.01)
+        world_layout.addWidget(self.worldStepPosEdit, 2, 5)
+
+        world_layout.addWidget(QtWidgets.QLabel("Yaw step (deg)"), 3, 4)
+        self.worldStepYawEdit = QtWidgets.QDoubleSpinBox()
+        self.worldStepYawEdit.setDecimals(1)
+        self.worldStepYawEdit.setRange(0.1, 45.0)
+        self.worldStepYawEdit.setValue(3.0)
+        world_layout.addWidget(self.worldStepYawEdit, 3, 5)
+
+        world_layout.addWidget(QtWidgets.QLabel("Target tolerance (m)"), 4, 4)
+        self.worldTolEdit = QtWidgets.QDoubleSpinBox()
+        self.worldTolEdit.setDecimals(3)
+        self.worldTolEdit.setRange(0.001, 0.200)
+        self.worldTolEdit.setValue(self.world_reach_tolerance)
+        world_layout.addWidget(self.worldTolEdit, 4, 5)
+
+        self.worldButtons = {}
+
+        btn_specs = [
+            ("X-", 3, 0, 0, -1), ("X+", 3, 1, 0, 1),
+            ("Y-", 3, 2, 1, -1), ("Y+", 3, 3, 1, 1),
+            ("Z-", 4, 0, 2, -1), ("Z+", 4, 1, 2, 1),
+            ("Yaw-", 4, 2, 3, -1), ("Yaw+", 4, 3, 3, 1),
+        ]
+
+        for text, row, col, axis_id, sign in btn_specs:
+            btn = QtWidgets.QPushButton(text)
+            btn.clicked.connect(lambda _, a=axis_id, s=sign: self.nudge_world_target(a, s))
+            world_layout.addWidget(btn, row, col)
+            self.worldButtons[text] = btn
+
+        left_layout.addWidget(self.worldGroup)
+
         btn_row = QtWidgets.QHBoxLayout()
         self.resetBtn = QtWidgets.QPushButton("Reset Angles")
         self.resetBtn.clicked.connect(self.reset_angles)
@@ -905,7 +1180,7 @@ class ModularJointUI(object):
         right_layout.addWidget(plot_title)
 
         plot_info = QtWidgets.QLabel(
-            "Switch between Skeleton and 3D Model mode. The plot and toolbar are styled to match the app theme."
+            "Switch between Skeleton and 3D Model mode. Use Joint mode for direct angles or World mode for X, Y, Z and yaw."
         )
         plot_info.setWordWrap(True)
         plot_info.setStyleSheet("color: #cbd5e1;")
@@ -1090,6 +1365,98 @@ class ModularJointUI(object):
         outer.addWidget(card)
         self.tabs.addTab(tab, "Configure Robot")
 
+    def sync_world_target_to_current(self):
+        X, Y, Z, pts, point_names, frames = forward_kin(self.modules)
+        self.world_target = np.array([X[-1], Y[-1], Z[-1]], dtype=float)
+        self.world_yaw = get_end_effector_yaw(frames)
+        self.refresh_world_fields()
+        if hasattr(self, "worldStatusLbl"):
+            self.worldStatusLbl.setText("World target synced to current end-effector pose.")
+
+    def refresh_world_fields(self):
+        if not hasattr(self, "worldXEdit"):
+            return
+
+        self.worldXEdit.blockSignals(True)
+        self.worldYEdit.blockSignals(True)
+        self.worldZEdit.blockSignals(True)
+        self.worldYawEdit.blockSignals(True)
+
+        self.worldXEdit.setValue(float(self.world_target[0]))
+        self.worldYEdit.setValue(float(self.world_target[1]))
+        self.worldZEdit.setValue(float(self.world_target[2]))
+        self.worldYawEdit.setValue(math.degrees(self.world_yaw))
+
+        if hasattr(self, "worldTolEdit"):
+            self.worldTolEdit.blockSignals(True)
+            self.worldTolEdit.setValue(self.world_reach_tolerance)
+            self.worldTolEdit.blockSignals(False)
+
+        self.worldXEdit.blockSignals(False)
+        self.worldYEdit.blockSignals(False)
+        self.worldZEdit.blockSignals(False)
+        self.worldYawEdit.blockSignals(False)
+
+    def refresh_control_mode_ui(self):
+        joint_enabled = self.control_mode == "Joint"
+
+        for i, row in enumerate(self.control_rows):
+            m = self.modules[i]
+            if m["fixed"] or m["type"] == "none":
+                row["down_btn"].setEnabled(False)
+                row["up_btn"].setEnabled(False)
+            else:
+                row["down_btn"].setEnabled(joint_enabled)
+                row["up_btn"].setEnabled(joint_enabled)
+
+        if hasattr(self, "worldGroup"):
+            self.worldGroup.setVisible(True)
+            self.worldGroup.setEnabled(self.control_mode == "World")
+
+    def move_world_target_absolute(self):
+        self.world_target = np.array([
+            self.worldXEdit.value(),
+            self.worldYEdit.value(),
+            self.worldZEdit.value()
+        ], dtype=float)
+        self.world_yaw = math.radians(self.worldYawEdit.value())
+        self.world_reach_tolerance = self.worldTolEdit.value()
+
+        ok, msg = solve_world_geometric(
+            self.modules,
+            self.world_target,
+            self.world_yaw,
+            reach_tolerance=self.world_reach_tolerance
+        )
+        self.refresh_all_control_rows()
+        self.plot_data()
+        self.worldStatusLbl.setText(msg)
+
+    def nudge_world_target(self, axis_id, sign):
+        self.world_step_pos = self.worldStepPosEdit.value()
+        self.world_step_yaw = math.radians(self.worldStepYawEdit.value())
+        self.world_reach_tolerance = self.worldTolEdit.value()
+
+        if axis_id == 0:
+            self.world_target[0] += sign * self.world_step_pos
+        elif axis_id == 1:
+            self.world_target[1] += sign * self.world_step_pos
+        elif axis_id == 2:
+            self.world_target[2] = max(0.0, self.world_target[2] + sign * self.world_step_pos)
+        elif axis_id == 3:
+            self.world_yaw = wrap_to_pi(self.world_yaw + sign * self.world_step_yaw)
+
+        self.refresh_world_fields()
+        ok, msg = solve_world_geometric(
+            self.modules,
+            self.world_target,
+            self.world_yaw,
+            reach_tolerance=self.world_reach_tolerance
+        )
+        self.refresh_all_control_rows()
+        self.plot_data()
+        self.worldStatusLbl.setText(msg)
+
     def refresh_structure_fields(self):
         for row in self.structure_rows:
             if row["kind"] == "joint":
@@ -1156,6 +1523,7 @@ class ModularJointUI(object):
             self.refresh_all_control_rows()
             self.refresh_structure_fields()
             self.refresh_config_fields()
+            self.sync_world_target_to_current()
             self.plot_data()
 
         except Exception as e:
@@ -1168,6 +1536,7 @@ class ModularJointUI(object):
         qmin, qmax = m["qlim"]
         m["q"] = max(qmin, min(qmax, round(m["q"] + delta_rad, 6)))
         self.refresh_control_row(idx)
+        self.sync_world_target_to_current()
         self.plot_data()
 
     def refresh_control_row(self, idx):
@@ -1191,8 +1560,8 @@ class ModularJointUI(object):
             row["angle_lbl"].setText(f"{self.angle_to_display(m['q']):.2f}")
             servo_deg = joint_to_servo_deg(m["name"], m["q"])
             row["aux_lbl"].setText("-" if servo_deg is None else f"{servo_deg:.1f}")
-            row["down_btn"].setEnabled(True)
-            row["up_btn"].setEnabled(True)
+            row["down_btn"].setEnabled(self.control_mode == "Joint")
+            row["up_btn"].setEnabled(self.control_mode == "Joint")
 
     def refresh_all_control_rows(self):
         for i in range(len(self.modules)):
@@ -1233,6 +1602,7 @@ class ModularJointUI(object):
             self.refresh_all_control_rows()
             self.refresh_structure_fields()
             self.refresh_config_fields()
+            self.sync_world_target_to_current()
             self.plot_data()
         except Exception as e:
             print("Apply geometry error:", e)
@@ -1243,6 +1613,7 @@ class ModularJointUI(object):
                 qmin, qmax = m["qlim"]
                 m["q"] = max(qmin, min(qmax, m["home_q"]))
         self.refresh_all_control_rows()
+        self.sync_world_target_to_current()
         self.plot_data()
 
     def reset_angles(self):
@@ -1250,6 +1621,7 @@ class ModularJointUI(object):
             if not m["fixed"] and m["type"] != "none":
                 m["q"] = 0.0
         self.refresh_all_control_rows()
+        self.sync_world_target_to_current()
         self.plot_data()
 
     def send(self):
@@ -1288,6 +1660,12 @@ class ModularJointUI(object):
                 else:
                     self.window.ax.text(pts[0][0], pts[0][1], pts[0][2] + 0.03, "BASE", fontsize=9, color='#e5e7eb')
                     self.window.ax.text(pts[-1][0], pts[-1][1], pts[-1][2] + 0.03, "GRIP", fontsize=9, color='#e5e7eb')
+
+                if self.control_mode == "World":
+                    self.window.ax.scatter(
+                        [self.world_target[0]], [self.world_target[1]], [self.world_target[2]],
+                        c='#fbbf24', s=45, marker='x'
+                    )
 
                 auto_fit_axes_cube(self.window.ax, X, Y, Z, scale=1.5, min_cube=0.4)
                 self.window.ax.view_init(elev=22, azim=-58)
