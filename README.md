@@ -5,7 +5,7 @@ Modular Robotic Arm
 
 ## C Setup
 - STM32CubeIDE (2.0.0)
-- STM32CubeMX
+- STM32CubeMX (6.16.1, it is important to download the same version)
 
 ## Python Setup
 First, download UV (a python management tool).
@@ -34,13 +34,15 @@ The initial setup of the RPI5 involved connecting mouse, keyboard, and monitor. 
 Typical workflow: I use remote SSH in VSC to develop and test on the RPI5. You could also use remote desktop connection on Windows to open up the RPI's Ubuntu GUI.
 
 ## RPI Transceiver
-The [transceiver](https://www.amazon.ca/MCP2515-Module-TJA1050-Receiver-Controller/dp/B07Z45RLMG) doesn't support a Raspberry Pi out of the box because it expects 5V logic levels for SPI. On any RPI, the logic level 3v3 for the GPIO (including SPI). Thus, the transceiver board must be modified. See [instructions here](https://github.com/tolgakarakurt/CANBus-MCP2515-Raspi) to modify.
+The [transceiver](https://www.amazon.ca/MCP2515-Module-TJA1050-Receiver-Controller/dp/B07Z45RLMG) doesn't support a Raspberry Pi out of the box because it expects 5V logic levels for SPI. On any RPI, the logic level 3v3 for the GPIO (including SPI). Thus, the transceiver board must be modified. See [instructions here](https://github.com/tolgakarakurt/CANBus-MCP2515-Raspi) to modify. 
+
+To connect to it, find the SPI pins on the [RPI](https://pinout.xyz/pinout/pin29_gpio5/). The soldered female dupont wire on the modified CAN transceiver should be fed with 5V.
 
 ## STM32 Setup
 ### Nucleo F303K8
 To power the STM32 Nucleo without the USB, we can supply 5V to the 5V pin (pin 4 on CN4 [right connector]). However, you must remove SB9 (0 ohm bridge) for it to work. SB9 holds down nRST.
 ### Nucleo F767ZI
-(TO BE UPDATED)
+  To power the F767ZI without the USB, you can supply 5V to CN11 pin 6. Note that you can still use the USB connection for flashing or debugging but you must power the device in the correct sequence (see pg 24 on the [manual](https://www.st.com/resource/en/user_manual/um1974-stm32-nucleo144-boards-mb1137-stmicroelectronics.pdf)).
 
 # Communication between RPI and STM32
 Communication between the two devices is done through a CAN bus. Examine `omni_robot.dbc` to see the existing CAN messages. The STM32 will broadcast voltage, temperature, position (degree) and if torque is enabled/disabled every 25 ms. An example of the RPI controlling a motor can be found in `test/test_motor.py`.
