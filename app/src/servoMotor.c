@@ -60,7 +60,7 @@ static SemaphoreHandle_t servo_bus_mutex = NULL;
 hiwonder_servo_t servo[MOTOR_MAX] __attribute__((section(".ccmram")));
 
 #define ENABLE_PUBLISH_STATUS
-#define ENABLE_MOTOR_TEST   // To enable CAN operation again, comment this out
+// #define ENABLE_MOTOR_TEST   // To enable CAN operation again, comment this out
 
 /* ========================================================================== */
 /* motor_scan()                                                                */
