@@ -4,6 +4,8 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 import sys
 import os
 import math
+from pathlib import Path
+
 import numpy as np
 import matplotlib
 matplotlib.use("Qt5Agg")
@@ -12,8 +14,26 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from mpl_toolkits.mplot3d import Axes3D
 
+try:
+    import cantools
+except ImportError:
+    cantools = None
+
+try:
+    import can
+except ImportError:
+    can = None
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DBC_PATH = Path(BASE_DIR) / "../app/common/omni_robot.dbc"
+CAN_CHANNEL = "can0"
+CAN_BITRATE = 500000
+DEFAULT_MOVE_MS = 1000
+MAX_CAN_SERVO_ID = 6
+
+WINDOW_W = 1450
+WINDOW_H = 860
 
 
 JOINT_TYPES = {
@@ -41,16 +61,26 @@ LINK_PRESETS_M = {
 
 
 SERVO_CAL = {
-    "J1":   {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J2":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J3":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J4":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J5":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J6":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J7":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J8":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "GRIP": {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J1":   {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 360.0, "invert": False},
+    "J2":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J3":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J4":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J5":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J6":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J7":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J8":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "GRIP": {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 360.0, "invert": False},
 }
+
+
+def default_servo_id_for_name(name):
+    if name.startswith("J"):
+        try:
+            n = int(name[1:])
+            return n if 1 <= n <= MAX_CAN_SERVO_ID else 0
+        except Exception:
+            return 0
+    return 0
 
 
 def make_default_modules(joint_count):
@@ -67,6 +97,7 @@ def make_default_modules(joint_count):
             "home_q": 0.0,
             "qlim": JOINT_TYPES["swivel"]["default_limits"],
             "fixed": False,
+            "servo_id": 1,
         })
 
     for i in range(2, joint_count + 1):
@@ -80,6 +111,7 @@ def make_default_modules(joint_count):
             "home_q": 0.0,
             "qlim": JOINT_TYPES["rotation"]["default_limits"],
             "fixed": False,
+            "servo_id": i if i <= MAX_CAN_SERVO_ID else 0,
         })
 
     modules.append({
@@ -92,6 +124,7 @@ def make_default_modules(joint_count):
         "home_q": 0.0,
         "qlim": JOINT_TYPES["swivel"]["default_limits"],
         "fixed": True,
+        "servo_id": 0,
     })
 
     return modules
@@ -107,19 +140,62 @@ def map_range(x, in_min, in_max, out_min, out_max):
     return out_min + (x - in_min) * (out_max - out_min) / (in_max - in_min)
 
 
-def joint_to_servo_deg(joint_name, joint_rad):
+def joint_to_servo_deg(module):
+    joint_name = module["name"]
+    joint_rad = module["q"]
+
     if joint_name not in SERVO_CAL:
         return None
-    c = SERVO_CAL[joint_name]
+
+    c = dict(SERVO_CAL[joint_name])
+
+    if module["type"] == "swivel":
+        c["joint_min"] = -180.0
+        c["joint_max"] = 180.0
+        c["servo_min"] = 0.0
+        c["servo_max"] = 360.0
+
     joint_deg = math.degrees(joint_rad)
     if c.get("invert", False):
         joint_deg = -joint_deg
+
     servo_deg = map_range(
         joint_deg,
         c["joint_min"], c["joint_max"],
         c["servo_min"], c["servo_max"]
     )
     return clamp(servo_deg, c["servo_min"], c["servo_max"])
+
+
+def servo_deg_to_joint_rad(module, servo_deg):
+    joint_name = module["name"]
+    if joint_name not in SERVO_CAL:
+        return None
+
+    c = dict(SERVO_CAL[joint_name])
+
+    if module["type"] == "swivel":
+        c["joint_min"] = -180.0
+        c["joint_max"] = 180.0
+        c["servo_min"] = 0.0
+        c["servo_max"] = 360.0
+
+    joint_deg = map_range(
+        float(servo_deg),
+        c["servo_min"], c["servo_max"],
+        c["joint_min"], c["joint_max"]
+    )
+
+    if c.get("invert", False):
+        joint_deg = -joint_deg
+
+    joint_rad = math.radians(joint_deg)
+
+    if not module["fixed"] and module["type"] != "none":
+        qmin, qmax = module["qlim"]
+        joint_rad = clamp(joint_rad, qmin, qmax)
+
+    return joint_rad
 
 
 def Tx(x, y, z):
@@ -410,7 +486,7 @@ def draw_robot_model(ax, joint_pts, frames):
 
 
 def create_plot():
-    fig = plt.figure(figsize=(7.5, 6.5), facecolor="#0f172a")
+    fig = plt.figure(figsize=(6.8, 5.6), facecolor="#0f172a")
     ax = fig.add_subplot(111, projection='3d')
     return fig, ax
 
@@ -589,10 +665,7 @@ def geometric_world_ik(modules, target_xyz, target_yaw, reach_tolerance=0.015, e
 def solve_world_geometric(modules, target_xyz, target_yaw, reach_tolerance=0.015):
     old_q = [m["q"] for m in modules]
 
-    ok1, msg1 = geometric_world_ik(
-        modules, target_xyz, target_yaw,
-        reach_tolerance=reach_tolerance, elbow_up=True
-    )
+    ok1, _ = geometric_world_ik(modules, target_xyz, target_yaw, reach_tolerance=reach_tolerance, elbow_up=True)
     if ok1:
         q_up = [m["q"] for m in modules]
         X, Y, Z, pts, names, frames = forward_kin(modules)
@@ -604,10 +677,7 @@ def solve_world_geometric(modules, target_xyz, target_yaw, reach_tolerance=0.015
     for i, q in enumerate(old_q):
         modules[i]["q"] = q
 
-    ok2, msg2 = geometric_world_ik(
-        modules, target_xyz, target_yaw,
-        reach_tolerance=reach_tolerance, elbow_up=False
-    )
+    ok2, _ = geometric_world_ik(modules, target_xyz, target_yaw, reach_tolerance=reach_tolerance, elbow_up=False)
     if ok2:
         q_down = [m["q"] for m in modules]
         X, Y, Z, pts, names, frames = forward_kin(modules)
@@ -629,6 +699,7 @@ def solve_world_geometric(modules, target_xyz, target_yaw, reach_tolerance=0.015
     X, Y, Z, pts, names, frames = forward_kin(modules)
     err = np.linalg.norm(target_xyz - np.array([X[-1], Y[-1], Z[-1]], dtype=float))
     return True, f"Target reached. Error {err:.3f} m."
+
 
 def apply_app_style(app):
     app.setStyle("Fusion")
@@ -654,12 +725,12 @@ def apply_app_style(app):
         QTabBar::tab {
             background: #1e293b;
             color: #cbd5e1;
-            padding: 10px 18px;
+            padding: 8px 14px;
             border: 1px solid #334155;
             border-bottom: none;
             border-top-left-radius: 8px;
             border-top-right-radius: 8px;
-            min-width: 100px;
+            min-width: 92px;
         }
         QTabBar::tab:selected {
             background: #2563eb;
@@ -673,8 +744,8 @@ def apply_app_style(app):
             color: white;
             border: none;
             border-radius: 8px;
-            padding: 8px 14px;
-            min-height: 34px;
+            padding: 7px 12px;
+            min-height: 32px;
             font-weight: 600;
         }
         QPushButton:hover {
@@ -692,15 +763,15 @@ def apply_app_style(app):
             color: #e5e7eb;
             border: 1px solid #334155;
             border-radius: 8px;
-            padding: 6px 8px;
-            min-height: 30px;
+            padding: 5px 7px;
+            min-height: 28px;
         }
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
             border: 1px solid #60a5fa;
         }
         QComboBox::drop-down {
             border: none;
-            width: 24px;
+            width: 22px;
         }
         QScrollArea, QScrollArea QWidget {
             background-color: #111827;
@@ -709,8 +780,8 @@ def apply_app_style(app):
             spacing: 8px;
         }
         QCheckBox::indicator {
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
         }
         QCheckBox::indicator:unchecked {
             border: 1px solid #64748b;
@@ -727,7 +798,7 @@ def apply_app_style(app):
             border: 1px solid #334155;
             border-radius: 10px;
             margin-top: 10px;
-            padding: 12px;
+            padding: 10px;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
@@ -740,7 +811,7 @@ def apply_app_style(app):
 
 
 def style_toolbar(toolbar):
-    toolbar.setIconSize(QtCore.QSize(22, 22))
+    toolbar.setIconSize(QtCore.QSize(20, 20))
     toolbar.setStyleSheet("""
         QToolBar {
             background: #1e293b;
@@ -753,7 +824,7 @@ def style_toolbar(toolbar):
             background: transparent;
             border: none;
             border-radius: 6px;
-            padding: 6px;
+            padding: 5px;
             margin: 1px;
         }
         QToolButton:hover {
@@ -798,24 +869,27 @@ class ModularJointUI(object):
         self.structure_rows = []
         self.config_rows = []
 
+        self.db = None
+        self.can_bus = None
+
         win.setWindowTitle("Robot Arm Studio")
-        win.resize(1600, 900)
+        win.resize(WINDOW_W, WINDOW_H)
 
         central = QtWidgets.QWidget()
         win.setCentralWidget(central)
         self.root = QtWidgets.QVBoxLayout(central)
-        self.root.setSpacing(12)
-        self.root.setContentsMargins(14, 14, 14, 14)
+        self.root.setSpacing(10)
+        self.root.setContentsMargins(10, 10, 10, 10)
 
         title = QtWidgets.QLabel("Robot Arm Studio")
-        title_font = QtGui.QFont("Segoe UI", 18)
+        title_font = QtGui.QFont("Segoe UI", 15)
         title_font.setBold(True)
         title.setFont(title_font)
         self.root.addWidget(title)
 
         top_group = QtWidgets.QGroupBox("Workspace")
         top_layout = QtWidgets.QHBoxLayout(top_group)
-        top_layout.setSpacing(14)
+        top_layout.setSpacing(10)
 
         count_lbl = QtWidgets.QLabel("Joint count")
         self.countSpin = QtWidgets.QSpinBox()
@@ -836,42 +910,37 @@ class ModularJointUI(object):
         self.stepSpin.setSingleStep(0.01)
         self.stepSpin.valueChanged.connect(self.change_step_size)
 
-        preview_lbl = QtWidgets.QLabel("Preview mode")
+        preview_lbl = QtWidgets.QLabel("Preview")
         self.previewModeBox = QtWidgets.QComboBox()
         self.previewModeBox.addItems(["Skeleton", "3D Model"])
         self.previewModeBox.setCurrentText(self.preview_mode)
         self.previewModeBox.currentTextChanged.connect(self.change_preview_mode)
 
-        mode_lbl = QtWidgets.QLabel("Control mode")
+        mode_lbl = QtWidgets.QLabel("Control")
         self.controlModeBox = QtWidgets.QComboBox()
         self.controlModeBox.addItems(["Joint", "World"])
         self.controlModeBox.setCurrentText(self.control_mode)
         self.controlModeBox.currentTextChanged.connect(self.change_control_mode)
 
         self.stepUnitLbl = QtWidgets.QLabel()
-        self.plotAxesCheck = QtWidgets.QCheckBox("Show plot axes")
+        self.plotAxesCheck = QtWidgets.QCheckBox("Plot axes")
         self.plotAxesCheck.setChecked(True)
         self.plotAxesCheck.toggled.connect(self.toggle_plot_axes)
 
-        self.frameAxesCheck = QtWidgets.QCheckBox("Show frame axes")
+        self.frameAxesCheck = QtWidgets.QCheckBox("Frame axes")
         self.frameAxesCheck.setChecked(True)
         self.frameAxesCheck.toggled.connect(self.toggle_frame_axes)
 
         self.posLbl = QtWidgets.QLabel("End-effector: X=0.000, Y=0.000, Z=0.000")
+        self.canStatusLbl = QtWidgets.QLabel("CAN: not initialized")
 
-        top_layout.addWidget(count_lbl)
-        top_layout.addWidget(self.countSpin)
-        top_layout.addWidget(unit_lbl)
-        top_layout.addWidget(self.unitBox)
-        top_layout.addWidget(step_lbl)
-        top_layout.addWidget(self.stepSpin)
-        top_layout.addWidget(self.stepUnitLbl)
-        top_layout.addWidget(preview_lbl)
-        top_layout.addWidget(self.previewModeBox)
-        top_layout.addWidget(mode_lbl)
-        top_layout.addWidget(self.controlModeBox)
-        top_layout.addWidget(self.plotAxesCheck)
-        top_layout.addWidget(self.frameAxesCheck)
+        for w in [
+            count_lbl, self.countSpin, unit_lbl, self.unitBox, step_lbl, self.stepSpin, self.stepUnitLbl,
+            preview_lbl, self.previewModeBox, mode_lbl, self.controlModeBox,
+            self.plotAxesCheck, self.frameAxesCheck, self.canStatusLbl
+        ]:
+            top_layout.addWidget(w)
+
         top_layout.addStretch()
         top_layout.addWidget(self.posLbl)
 
@@ -888,7 +957,30 @@ class ModularJointUI(object):
         self.rebuild_tabs()
         self.refresh_step_spin()
         self.sync_world_target_to_current()
+        self.init_can()
         self.plot_data()
+
+    def init_can(self):
+        if cantools is None or can is None:
+            self.db = None
+            self.can_bus = None
+            self.canStatusLbl.setText("CAN: disabled (missing cantools/python-can)")
+            return
+
+        if os.name == "nt":
+            self.db = None
+            self.can_bus = None
+            self.canStatusLbl.setText("CAN: disabled on Windows")
+            return
+
+        try:
+            self.db = cantools.database.load_file(str(DBC_PATH))
+            self.can_bus = can.Bus(interface="socketcan", channel=CAN_CHANNEL, bitrate=CAN_BITRATE)
+            self.canStatusLbl.setText(f"CAN: ready on {CAN_CHANNEL}")
+        except Exception as e:
+            self.db = None
+            self.can_bus = None
+            self.canStatusLbl.setText(f"CAN: init failed ({e})")
 
     def angle_to_display(self, rad_value):
         return math.degrees(rad_value) if self.unit_mode == "Degrees" else rad_value
@@ -967,6 +1059,7 @@ class ModularJointUI(object):
                 m["home_q"] = old["home_q"]
                 m["qlim"] = old["qlim"]
                 m["fixed"] = old["fixed"]
+                m["servo_id"] = old.get("servo_id", default_servo_id_for_name(m["name"]))
 
         self.modules = new_modules
         self.rebuild_tabs()
@@ -990,12 +1083,8 @@ class ModularJointUI(object):
         self.config_max_header.setText(f"Max ({self.angle_unit_short()})")
         self.config_home_header.setText(f"Home ({self.angle_unit_short()})")
         self.help_lbl.setText(
-            f"Choose the number of joints at the top. The Structure tab shows joints and links in sequence.\n"
-            f"Link presets are 4 in, 6 in, and 8 in; the robot model uses meters internally.\n"
-            f"Preview mode can be a fast skeleton or an improved stylized 3D solid model.\n"
-            f"World control uses a geometric IK intended for a base swivel plus pitch-chain arm.\n"
-            f"The target tolerance field sets how close the end-effector must be to count as reached.\n"
-            f"The 3D view stays cubic and scales to about 1.5 times the robot span."
+            "Rotation joints are limited to -90..90 in the GUI, but their servo command mapping uses a -120..120 physical range. "
+            "Read Angles listens for MCU_Status_1..MCU_Status_6 and maps JointAngle_deg back into joint angles."
         )
 
     def make_card(self):
@@ -1006,28 +1095,28 @@ class ModularJointUI(object):
     def build_control_tab(self):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(tab)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         left_card = self.make_card()
         left_layout = QtWidgets.QVBoxLayout(left_card)
 
         subtitle = QtWidgets.QLabel("Joint Control")
-        subtitle_font = QtGui.QFont("Segoe UI", 12)
+        subtitle_font = QtGui.QFont("Segoe UI", 11)
         subtitle_font.setBold(True)
         subtitle.setFont(subtitle_font)
         left_layout.addWidget(subtitle)
 
         grid_wrap = QtWidgets.QWidget()
         grid = QtWidgets.QGridLayout(grid_wrap)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(10)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
 
-        headers = ["Joint", "Type", "Axis", "Down", None, "Up", "Servo"]
+        headers = ["Joint", "Type", "Axis", "Servo ID", "Down", None, "Up", "Servo Cmd"]
         for c, text in enumerate(headers):
             lbl = QtWidgets.QLabel("" if text is None else text)
             lbl.setStyleSheet("color: #93c5fd; font-weight: 700;")
             grid.addWidget(lbl, 0, c)
-            if c == 4:
+            if c == 5:
                 self.control_angle_header = lbl
 
         for i, m in enumerate(self.modules, start=1):
@@ -1035,41 +1124,50 @@ class ModularJointUI(object):
             type_lbl = QtWidgets.QLabel(m["type"])
             axis_lbl = QtWidgets.QLabel(m["axis"].upper())
 
+            servo_id_box = QtWidgets.QSpinBox()
+            servo_id_box.setRange(0, 6)
+            servo_id_box.setValue(int(m.get("servo_id", 0)))
+            servo_id_box.setMaximumWidth(70)
+            if m["fixed"]:
+                servo_id_box.setEnabled(False)
+
             down_btn = QtWidgets.QPushButton()
             down_btn.setIcon(self.icon_down)
-            down_btn.setIconSize(QtCore.QSize(24, 24))
-            down_btn.setFixedSize(42, 42)
+            down_btn.setIconSize(QtCore.QSize(20, 20))
+            down_btn.setFixedSize(38, 38)
 
             angle_lbl = QtWidgets.QLabel()
             angle_lbl.setFrameShape(QtWidgets.QFrame.Box)
             angle_lbl.setAlignment(QtCore.Qt.AlignCenter)
-            angle_lbl.setMinimumWidth(95)
-            angle_lbl.setMinimumHeight(36)
+            angle_lbl.setMinimumWidth(85)
+            angle_lbl.setMinimumHeight(34)
             angle_lbl.setStyleSheet("border: 1px solid #334155; border-radius: 8px; background: #0b1220;")
 
             up_btn = QtWidgets.QPushButton()
             up_btn.setIcon(self.icon_up)
-            up_btn.setIconSize(QtCore.QSize(24, 24))
-            up_btn.setFixedSize(42, 42)
+            up_btn.setIconSize(QtCore.QSize(20, 20))
+            up_btn.setFixedSize(38, 38)
 
             aux_lbl = QtWidgets.QLabel()
             aux_lbl.setAlignment(QtCore.Qt.AlignCenter)
-            aux_lbl.setMinimumWidth(90)
+            aux_lbl.setMinimumWidth(80)
 
             if not m["fixed"]:
                 down_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, -self.step_rad))
                 up_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, self.step_rad))
+                servo_id_box.valueChanged.connect(lambda val, idx=i-1: self.change_servo_id(idx, val))
             else:
                 down_btn.setEnabled(False)
                 up_btn.setEnabled(False)
 
-            widgets = [name_lbl, type_lbl, axis_lbl, down_btn, angle_lbl, up_btn, aux_lbl]
+            widgets = [name_lbl, type_lbl, axis_lbl, servo_id_box, down_btn, angle_lbl, up_btn, aux_lbl]
             for c, w in enumerate(widgets):
                 grid.addWidget(w, i, c)
 
             self.control_rows.append({
                 "type_lbl": type_lbl,
                 "axis_lbl": axis_lbl,
+                "servo_id_box": servo_id_box,
                 "down_btn": down_btn,
                 "angle_lbl": angle_lbl,
                 "up_btn": up_btn,
@@ -1080,10 +1178,10 @@ class ModularJointUI(object):
 
         self.worldGroup = QtWidgets.QGroupBox("World Control")
         world_layout = QtWidgets.QGridLayout(self.worldGroup)
-        world_layout.setHorizontalSpacing(10)
+        world_layout.setHorizontalSpacing(8)
         world_layout.setVerticalSpacing(8)
 
-        self.worldStatusLbl = QtWidgets.QLabel("Move the end-effector in world X, Y, Z and swivel yaw.")
+        self.worldStatusLbl = QtWidgets.QLabel("Move the end-effector in world X, Y, Z and yaw.")
         self.worldStatusLbl.setWordWrap(True)
         world_layout.addWidget(self.worldStatusLbl, 0, 0, 1, 6)
 
@@ -1123,28 +1221,26 @@ class ModularJointUI(object):
         self.worldGoBtn.clicked.connect(self.move_world_target_absolute)
         world_layout.addWidget(self.worldGoBtn, 2, 3)
 
-        world_layout.addWidget(QtWidgets.QLabel("World step (m)"), 2, 4)
+        world_layout.addWidget(QtWidgets.QLabel("Step (m)"), 2, 4)
         self.worldStepPosEdit = QtWidgets.QDoubleSpinBox()
         self.worldStepPosEdit.setDecimals(3)
         self.worldStepPosEdit.setRange(0.001, 0.200)
         self.worldStepPosEdit.setValue(0.01)
         world_layout.addWidget(self.worldStepPosEdit, 2, 5)
 
-        world_layout.addWidget(QtWidgets.QLabel("Yaw step (deg)"), 3, 4)
+        world_layout.addWidget(QtWidgets.QLabel("Yaw step"), 3, 4)
         self.worldStepYawEdit = QtWidgets.QDoubleSpinBox()
         self.worldStepYawEdit.setDecimals(1)
         self.worldStepYawEdit.setRange(0.1, 45.0)
         self.worldStepYawEdit.setValue(3.0)
         world_layout.addWidget(self.worldStepYawEdit, 3, 5)
 
-        world_layout.addWidget(QtWidgets.QLabel("Target tolerance (m)"), 4, 4)
+        world_layout.addWidget(QtWidgets.QLabel("Tolerance"), 4, 4)
         self.worldTolEdit = QtWidgets.QDoubleSpinBox()
         self.worldTolEdit.setDecimals(3)
         self.worldTolEdit.setRange(0.001, 0.200)
         self.worldTolEdit.setValue(self.world_reach_tolerance)
         world_layout.addWidget(self.worldTolEdit, 4, 5)
-
-        self.worldButtons = {}
 
         btn_specs = [
             ("X-", 3, 0, 0, -1), ("X+", 3, 1, 0, 1),
@@ -1152,23 +1248,34 @@ class ModularJointUI(object):
             ("Z-", 4, 0, 2, -1), ("Z+", 4, 1, 2, 1),
             ("Yaw-", 4, 2, 3, -1), ("Yaw+", 4, 3, 3, 1),
         ]
-
         for text, row, col, axis_id, sign in btn_specs:
             btn = QtWidgets.QPushButton(text)
             btn.clicked.connect(lambda _, a=axis_id, s=sign: self.nudge_world_target(a, s))
             world_layout.addWidget(btn, row, col)
-            self.worldButtons[text] = btn
 
         left_layout.addWidget(self.worldGroup)
 
         btn_row = QtWidgets.QHBoxLayout()
-        self.resetBtn = QtWidgets.QPushButton("Reset Angles")
+        self.resetBtn = QtWidgets.QPushButton("Reset")
         self.resetBtn.clicked.connect(self.reset_angles)
         btn_row.addWidget(self.resetBtn)
+
+        self.homeBtn = QtWidgets.QPushButton("Home")
+        self.homeBtn.clicked.connect(self.go_home)
+        btn_row.addWidget(self.homeBtn)
+
+        self.reconfigBtn = QtWidgets.QPushButton("Send Servo IDs")
+        self.reconfigBtn.clicked.connect(self.send_servo_ids)
+        btn_row.addWidget(self.reconfigBtn)
 
         self.sendBtn = QtWidgets.QPushButton("Send")
         self.sendBtn.clicked.connect(self.send)
         btn_row.addWidget(self.sendBtn)
+
+        self.readBtn = QtWidgets.QPushButton("Read Angles")
+        self.readBtn.clicked.connect(self.read_current_angles)
+        btn_row.addWidget(self.readBtn)
+
         btn_row.addStretch()
         left_layout.addLayout(btn_row)
 
@@ -1179,15 +1286,13 @@ class ModularJointUI(object):
         plot_title.setFont(subtitle_font)
         right_layout.addWidget(plot_title)
 
-        plot_info = QtWidgets.QLabel(
-            "Switch between Skeleton and 3D Model mode. Use Joint mode for direct angles or World mode for X, Y, Z and yaw."
-        )
+        plot_info = QtWidgets.QLabel("Resizable window; CAN readback uses MCU_Status_1..6 JointAngle_deg.")
         plot_info.setWordWrap(True)
         plot_info.setStyleSheet("color: #cbd5e1;")
         right_layout.addWidget(plot_info)
 
         right_layout.addWidget(self.window.toolbar)
-        self.window.canvas.setMinimumHeight(520)
+        self.window.canvas.setMinimumHeight(480)
         self.window.canvas.setStyleSheet("background: #0b1220; border: 1px solid #334155; border-radius: 8px;")
         right_layout.addWidget(self.window.canvas, 1)
 
@@ -1203,9 +1308,7 @@ class ModularJointUI(object):
         card = self.make_card()
         card_layout = QtWidgets.QVBoxLayout(card)
 
-        info_lbl = QtWidgets.QLabel(
-            "Quick structure editor: choose each joint type, and each link length between joints."
-        )
+        info_lbl = QtWidgets.QLabel("Quick structure editor: choose each joint type and each link length.")
         info_lbl.setWordWrap(True)
         card_layout.addWidget(info_lbl)
 
@@ -1247,7 +1350,6 @@ class ModularJointUI(object):
                 link_lbl = QtWidgets.QLabel(f"L{i+1}")
                 link_box = QtWidgets.QComboBox()
                 link_box.addItems([f"{v} in" for v in LINK_PRESETS_IN])
-                link_box.setMinimumContentsLength(6)
 
                 grid.addWidget(link_lbl, row_idx, 0)
                 grid.addWidget(link_box, row_idx, 1)
@@ -1288,8 +1390,8 @@ class ModularJointUI(object):
 
         content = QtWidgets.QWidget()
         grid = QtWidgets.QGridLayout(content)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(10)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
 
         headers = ["Joint", "Type", "Axis", "Offset X", "Offset Y", "Offset Z", "Link X", "Link Y", "Link Z", None, None, None]
         for c, text in enumerate(headers):
@@ -1327,7 +1429,7 @@ class ModularJointUI(object):
             widgets = [name_lbl, type_box, axis_box, ox, oy, oz, lx, ly, lz, qmin_edit, qmax_edit, home_edit]
             for c, w in enumerate(widgets):
                 if hasattr(w, "setMinimumWidth"):
-                    w.setMinimumWidth(72)
+                    w.setMinimumWidth(64)
                 grid.addWidget(w, i, c)
 
             if m["fixed"]:
@@ -1354,16 +1456,14 @@ class ModularJointUI(object):
         self.applyBtn = QtWidgets.QPushButton("Apply Geometry")
         self.applyBtn.clicked.connect(self.apply_geometry)
         btn_row.addWidget(self.applyBtn)
-
-        self.homeBtn = QtWidgets.QPushButton("Go Home")
-        self.homeBtn.clicked.connect(self.go_home)
-        btn_row.addWidget(self.homeBtn)
-
         btn_row.addStretch()
         card_layout.addLayout(btn_row)
 
         outer.addWidget(card)
         self.tabs.addTab(tab, "Configure Robot")
+
+    def change_servo_id(self, idx, value):
+        self.modules[idx]["servo_id"] = int(value)
 
     def sync_world_target_to_current(self):
         X, Y, Z, pts, point_names, frames = forward_kin(self.modules)
@@ -1371,7 +1471,7 @@ class ModularJointUI(object):
         self.world_yaw = get_end_effector_yaw(frames)
         self.refresh_world_fields()
         if hasattr(self, "worldStatusLbl"):
-            self.worldStatusLbl.setText("World target synced to current end-effector pose.")
+            self.worldStatusLbl.setText("World target synced to current pose.")
 
     def refresh_world_fields(self):
         if not hasattr(self, "worldXEdit"):
@@ -1422,12 +1522,7 @@ class ModularJointUI(object):
         self.world_yaw = math.radians(self.worldYawEdit.value())
         self.world_reach_tolerance = self.worldTolEdit.value()
 
-        ok, msg = solve_world_geometric(
-            self.modules,
-            self.world_target,
-            self.world_yaw,
-            reach_tolerance=self.world_reach_tolerance
-        )
+        ok, msg = solve_world_geometric(self.modules, self.world_target, self.world_yaw, reach_tolerance=self.world_reach_tolerance)
         self.refresh_all_control_rows()
         self.plot_data()
         self.worldStatusLbl.setText(msg)
@@ -1447,12 +1542,7 @@ class ModularJointUI(object):
             self.world_yaw = wrap_to_pi(self.world_yaw + sign * self.world_step_yaw)
 
         self.refresh_world_fields()
-        ok, msg = solve_world_geometric(
-            self.modules,
-            self.world_target,
-            self.world_yaw,
-            reach_tolerance=self.world_reach_tolerance
-        )
+        ok, msg = solve_world_geometric(self.modules, self.world_target, self.world_yaw, reach_tolerance=self.world_reach_tolerance)
         self.refresh_all_control_rows()
         self.plot_data()
         self.worldStatusLbl.setText(msg)
@@ -1525,7 +1615,6 @@ class ModularJointUI(object):
             self.refresh_config_fields()
             self.sync_world_target_to_current()
             self.plot_data()
-
         except Exception as e:
             print("Apply structure error:", e)
 
@@ -1544,10 +1633,13 @@ class ModularJointUI(object):
         row = self.control_rows[idx]
         row["type_lbl"].setText(m["type"])
         row["axis_lbl"].setText(m["axis"].upper())
+        row["servo_id_box"].blockSignals(True)
+        row["servo_id_box"].setValue(int(m.get("servo_id", 0)))
+        row["servo_id_box"].blockSignals(False)
 
         if m["fixed"]:
             row["angle_lbl"].setText("fixed")
-            servo_deg = joint_to_servo_deg(m["name"], m["q"])
+            servo_deg = joint_to_servo_deg(m)
             row["aux_lbl"].setText("-" if servo_deg is None else f"{servo_deg:.1f}")
             row["down_btn"].setEnabled(False)
             row["up_btn"].setEnabled(False)
@@ -1558,7 +1650,7 @@ class ModularJointUI(object):
             row["up_btn"].setEnabled(False)
         else:
             row["angle_lbl"].setText(f"{self.angle_to_display(m['q']):.2f}")
-            servo_deg = joint_to_servo_deg(m["name"], m["q"])
+            servo_deg = joint_to_servo_deg(m)
             row["aux_lbl"].setText("-" if servo_deg is None else f"{servo_deg:.1f}")
             row["down_btn"].setEnabled(self.control_mode == "Joint")
             row["up_btn"].setEnabled(self.control_mode == "Joint")
@@ -1571,8 +1663,7 @@ class ModularJointUI(object):
         try:
             for i, m in enumerate(self.modules):
                 row = self.config_rows[i]
-                mtype = row["type_box"].currentText()
-                m["type"] = mtype
+                m["type"] = row["type_box"].currentText()
                 m["axis"] = row["axis_box"].currentText()
                 m["offset"] = np.array([
                     float(row["ox"].text()),
@@ -1624,19 +1715,155 @@ class ModularJointUI(object):
         self.sync_world_target_to_current()
         self.plot_data()
 
+    def send_servo_ids(self):
+        try:
+            if self.db is None or self.can_bus is None:
+                print("[WARN] CAN not ready")
+                return
+
+            msg_def = self.db.get_message_by_name("RPi_Reconfig")
+            payload_dict = {}
+            for sid in range(1, MAX_CAN_SERVO_ID + 1):
+                payload_dict[f"Servo{sid}_ID"] = sid
+
+            for m in self.modules:
+                servo_id = int(m.get("servo_id", 0))
+                if 1 <= servo_id <= MAX_CAN_SERVO_ID:
+                    joint_name = m["name"]
+                    if joint_name.startswith("J"):
+                        try:
+                            joint_num = int(joint_name[1:])
+                            if 1 <= joint_num <= MAX_CAN_SERVO_ID:
+                                payload_dict[f"Servo{joint_num}_ID"] = servo_id
+                        except Exception:
+                            pass
+
+            payload = msg_def.encode(payload_dict)
+            msg = can.Message(arbitration_id=msg_def.frame_id, data=payload, is_extended_id=False)
+            self.can_bus.send(msg)
+            print("[SEND] RPi_Reconfig", payload_dict)
+        except Exception as e:
+            print("Send Servo IDs error:", e)
+
     def send(self):
         try:
-            values = []
+            if self.db is None or self.can_bus is None:
+                print("[WARN] CAN not ready")
+                return
+
             for m in self.modules:
                 if m["fixed"] or m["type"] == "none":
                     continue
-                servo_deg = joint_to_servo_deg(m["name"], m["q"])
-                if servo_deg is not None:
-                    values.append(servo_deg)
-            data = ",".join(f"{v:.1f}" for v in values)
-            print("SEND:", data)
+
+                servo_id = int(m.get("servo_id", 0))
+                if not (1 <= servo_id <= MAX_CAN_SERVO_ID):
+                    print(f"[WARN] Skipping {m['name']}: invalid servo_id={servo_id}")
+                    continue
+
+                servo_deg = joint_to_servo_deg(m)
+                if servo_deg is None:
+                    print(f"[WARN] Skipping {m['name']}: no servo calibration")
+                    continue
+
+                msg_name = f"RPi_Command_{servo_id}"
+                msg_def = self.db.get_message_by_name(msg_name)
+                payload = msg_def.encode({
+                    "TargetAngle_deg": float(servo_deg),
+                    "MoveTime_ms": int(DEFAULT_MOVE_MS),
+                })
+
+                msg = can.Message(arbitration_id=msg_def.frame_id, data=payload, is_extended_id=False)
+                self.can_bus.send(msg)
+                print(f"[SEND] {msg_name}: angle={servo_deg:.1f} deg time={DEFAULT_MOVE_MS} ms")
         except Exception as e:
             print("Send error:", e)
+
+    def read_current_angles(self):
+        try:
+            if self.db is None or self.can_bus is None:
+                print("[WARN] CAN not ready")
+                return
+
+            expected_names = {
+                1: "MCU_Status_1",
+                2: "MCU_Status_2",
+                3: "MCU_Status_3",
+                4: "MCU_Status_4",
+                5: "MCU_Status_5",
+                6: "MCU_Status_6",
+            }
+
+            self.canStatusLbl.setText("CAN: reading angles...")
+            QtWidgets.QApplication.processEvents()
+
+            readback = {}
+            deadline_ms = 1500
+            timer = QtCore.QElapsedTimer()
+            timer.start()
+
+            while timer.elapsed() < deadline_ms and len(readback) < 6:
+                msg = self.can_bus.recv(timeout=0.10)
+                if msg is None:
+                    continue
+
+                try:
+                    msg_def = self.db.get_message_by_frame_id(msg.arbitration_id)
+                except Exception:
+                    continue
+
+                msg_name = msg_def.name
+                if msg_name not in expected_names.values():
+                    continue
+
+                try:
+                    decoded = self.db.decode_message(msg.arbitration_id, msg.data)
+                except Exception:
+                    continue
+
+                servo_id = None
+                for sid, name in expected_names.items():
+                    if msg_name == name:
+                        servo_id = sid
+                        break
+
+                if servo_id is None:
+                    continue
+
+                if "JointAngle_deg" not in decoded:
+                    continue
+
+                readback[servo_id] = float(decoded["JointAngle_deg"])
+
+            updated = 0
+            for m in self.modules:
+                if m["fixed"] or m["type"] == "none":
+                    continue
+
+                servo_id = int(m.get("servo_id", 0))
+                if servo_id not in readback:
+                    continue
+
+                joint_rad = servo_deg_to_joint_rad(m, readback[servo_id])
+                if joint_rad is None:
+                    continue
+
+                m["q"] = joint_rad
+                updated += 1
+
+            self.refresh_all_control_rows()
+            self.sync_world_target_to_current()
+            self.plot_data()
+
+            if updated > 0:
+                self.canStatusLbl.setText(f"CAN: read {updated} joint angles")
+            else:
+                self.canStatusLbl.setText("CAN: no status frames received")
+
+            print("[READ] servo readback:", readback)
+
+        except Exception as e:
+            self.canStatusLbl.setText(f"CAN: read failed ({e})")
+            print("Read Angles error:", e)
 
     def plot_data(self):
         try:
@@ -1650,16 +1877,16 @@ class ModularJointUI(object):
                     draw_robot_model(self.window.ax, pts, frames)
                     self.window.ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='#f87171', s=50)
                 else:
-                    self.window.ax.plot(X, Y, Z, color='#60a5fa', marker='o', linewidth=2.5, markersize=5, label='Arm')
-                    self.window.ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='#f87171', s=90, label='End-effector')
+                    self.window.ax.plot(X, Y, Z, color='#60a5fa', marker='o', linewidth=2.2, markersize=5, label='Arm')
+                    self.window.ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='#f87171', s=80, label='End-effector')
                     draw_frame_axes(self.window.ax, frames, show_axes_frames=self.show_frame_axes)
 
                 if self.preview_mode == "Skeleton":
                     for i, (x, y, z) in enumerate(pts):
-                        self.window.ax.text(x, y, z + 0.02, point_names[i], fontsize=9, color='#e5e7eb')
+                        self.window.ax.text(x, y, z + 0.02, point_names[i], fontsize=8, color='#e5e7eb')
                 else:
-                    self.window.ax.text(pts[0][0], pts[0][1], pts[0][2] + 0.03, "BASE", fontsize=9, color='#e5e7eb')
-                    self.window.ax.text(pts[-1][0], pts[-1][1], pts[-1][2] + 0.03, "GRIP", fontsize=9, color='#e5e7eb')
+                    self.window.ax.text(pts[0][0], pts[0][1], pts[0][2] + 0.03, "BASE", fontsize=8, color='#e5e7eb')
+                    self.window.ax.text(pts[-1][0], pts[-1][1], pts[-1][2] + 0.03, "GRIP", fontsize=8, color='#e5e7eb')
 
                 if self.control_mode == "World":
                     self.window.ax.scatter(
@@ -1677,7 +1904,6 @@ class ModularJointUI(object):
 
                 self.window.fig.tight_layout()
                 self.window.canvas.draw()
-
                 self.posLbl.setText(f"End-effector: X={X[-1]:.3f}, Y={Y[-1]:.3f}, Z={Z[-1]:.3f}")
         except Exception as e:
             print("Plot error:", e)
