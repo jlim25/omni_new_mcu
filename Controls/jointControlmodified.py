@@ -18,7 +18,7 @@ import ServoControl
 DEFAULT_MOVE_MS = 1000
 WINDOW_W = 1450
 WINDOW_H = 860
-MAX_SERVO_ID = 8
+MAX_SERVO_ID = 254
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -73,18 +73,106 @@ def default_servo_id_for_name(name):
 def make_default_modules(joint_count):
     modules = []
 
+    if joint_count == 5:
+        # =========================================================
+        # CUSTOM 5-JOINT DEFAULT CONFIG
+        # Edit this block however you want for your preferred setup.
+        # =========================================================
+        modules = [
+            {
+                "name": "J1",
+                "type": "swivel",
+                "axis": "z",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.2032], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi, math.pi),
+                "fixed": False,
+                "servo_id": 1,
+                "servo_offset_deg": 0.0,
+            },
+            {
+                "name": "J2",
+                "type": "rotation",
+                "axis": "y",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.1524], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi / 2, math.pi / 2),
+                "fixed": False,
+                "servo_id": 2,
+                "servo_offset_deg": 0.0,
+            },
+            {
+                "name": "J3",
+                "type": "rotation",
+                "axis": "y",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.1016], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi / 2, math.pi / 2),
+                "fixed": False,
+                "servo_id": 4,
+                "servo_offset_deg": 0.0,
+            },
+            {
+                "name": "J4",
+                "type": "rotation",
+                "axis": "y",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.1016], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi / 2, math.pi / 2),
+                "fixed": False,
+                "servo_id": 6,
+                "servo_offset_deg": 0.0,
+            },
+            {
+                "name": "J5",
+                "type": "swivel",
+                "axis": "y",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.0], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi, math.pi),
+                "fixed": False,
+                "servo_id": 5,
+                "servo_offset_deg": 0.0,
+            },
+            {
+                "name": "GRIP",
+                "type": "swivel",
+                "axis": "z",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.0], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi, math.pi),
+                "fixed": True,
+                "servo_id": 0,
+                "servo_offset_deg": 0.0,
+            }
+        ]
+        return modules
+
     if joint_count >= 1:
         modules.append({
             "name": "J1",
             "type": "swivel",
             "axis": "z",
             "offset": np.array([0.0, 0.0, 0.0], dtype=float),
-            "link": np.array([0.0, 0.0, 0.1524], dtype=float),
+            "link": np.array([0.0, 0.0, 0.0], dtype=float),
             "q": 0.0,
             "home_q": 0.0,
             "qlim": JOINT_TYPES["swivel"]["default_limits"],
             "fixed": False,
             "servo_id": 1,
+            "servo_offset_deg": 0.0,
         })
 
     for i in range(2, joint_count + 1):
@@ -99,6 +187,7 @@ def make_default_modules(joint_count):
             "qlim": JOINT_TYPES["rotation"]["default_limits"],
             "fixed": False,
             "servo_id": i if i <= MAX_SERVO_ID else 0,
+            "servo_offset_deg": 0.0,
         })
 
     modules.append({
@@ -112,6 +201,7 @@ def make_default_modules(joint_count):
         "qlim": JOINT_TYPES["swivel"]["default_limits"],
         "fixed": True,
         "servo_id": 0,
+        "servo_offset_deg": 0.0,
     })
 
     return modules
@@ -151,6 +241,8 @@ def joint_to_servo_deg(module):
         c["joint_min"], c["joint_max"],
         c["servo_min"], c["servo_max"]
     )
+
+    servo_deg += float(module.get("servo_offset_deg", 0.0))
     return clamp(servo_deg, c["servo_min"], c["servo_max"])
 
 
@@ -167,8 +259,10 @@ def servo_deg_to_joint_rad(module, servo_deg):
         c["servo_min"] = 0.0
         c["servo_max"] = 360.0
 
+    servo_deg = float(servo_deg) - float(module.get("servo_offset_deg", 0.0))
+
     joint_deg = map_range(
-        float(servo_deg),
+        servo_deg,
         c["servo_min"], c["servo_max"],
         c["joint_min"], c["joint_max"]
     )
@@ -685,13 +779,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas = FigureCanvas(self.fig)
         self.toolbar = NavigationToolbar(self.canvas, self)
 
+        self.struct_fig, self.struct_ax = create_plot()
+        self.struct_canvas = FigureCanvas(self.struct_fig)
+        self.struct_toolbar = NavigationToolbar(self.struct_canvas, self)
+
+        self.cfg_fig, self.cfg_ax = create_plot()
+        self.cfg_canvas = FigureCanvas(self.cfg_fig)
+        self.cfg_toolbar = NavigationToolbar(self.cfg_canvas, self)
+
 
 class ModularJointUI(object):
     def setupUi(self, win):
         self.window = win
-        self.unit_mode = "Radians"
-        self.step_rad = 0.05
-        self.joint_count = 4
+        self.unit_mode = "Degrees"
+        self.step_rad = 0.0872665
+        self.step_degree = 5
+        self.joint_count = 5
         self.modules = make_default_modules(self.joint_count)
         self.show_plot_axes = True
         self.show_frame_axes = True
@@ -709,8 +812,9 @@ class ModularJointUI(object):
         self.saved_poses = []
 
         self.uart_ready = False
+        self.view_needs_refit = True
 
-        win.setWindowTitle("Robot Arm Studio")
+        win.setWindowTitle("OMNI Robot Arm Studio")
         win.resize(WINDOW_W, WINDOW_H)
 
         central = QtWidgets.QWidget()
@@ -719,7 +823,7 @@ class ModularJointUI(object):
         self.root.setSpacing(10)
         self.root.setContentsMargins(10, 10, 10, 10)
 
-        title = QtWidgets.QLabel("Robot Arm Studio")
+        title = QtWidgets.QLabel("OMNI Robot Arm Studio")
         title_font = QtGui.QFont("Segoe UI", 15)
         title_font.setBold(True)
         title.setFont(title_font)
@@ -791,6 +895,8 @@ class ModularJointUI(object):
         self.icon_down = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, "down.png")))
 
         style_toolbar(self.window.toolbar)
+        style_toolbar(self.window.struct_toolbar)
+        style_toolbar(self.window.cfg_toolbar)
 
         self.rebuild_tabs()
         self.refresh_step_spin()
@@ -886,10 +992,12 @@ class ModularJointUI(object):
                 m["qlim"] = old["qlim"]
                 m["fixed"] = old["fixed"]
                 m["servo_id"] = old.get("servo_id", default_servo_id_for_name(m["name"]))
+                m["servo_offset_deg"] = old.get("servo_offset_deg", 0.0)
 
         self.modules = new_modules
         self.rebuild_tabs()
         self.sync_world_target_to_current()
+        self.view_needs_refit = True
         self.plot_data()
 
     def change_step_size(self, shown_value):
@@ -905,12 +1013,14 @@ class ModularJointUI(object):
 
     def refresh_headers(self):
         self.control_angle_header.setText(f"Angle ({self.angle_unit_short()})")
+        self.config_offset_header.setText("Servo Offset (deg)")
         self.config_min_header.setText(f"Min ({self.angle_unit_short()})")
         self.config_max_header.setText(f"Max ({self.angle_unit_short()})")
         self.config_home_header.setText(f"Home ({self.angle_unit_short()})")
         self.help_lbl.setText(
             "Rotation joints use 240-degree servo mapping and swivel joints use 360-degree mapping. "
-            "Read Angles queries the Hiwonder controller using the configured Servo ID values."
+            "Read Angles queries the Hiwonder controller using the configured Servo ID values. "
+            "Servo Offset (deg) shifts the commanded servo center and is reversed during readback."
         )
 
     def make_card(self):
@@ -1124,10 +1234,6 @@ class ModularJointUI(object):
         self.homeBtn.clicked.connect(self.go_home)
         btn_row.addWidget(self.homeBtn)
 
-        self.reconfigBtn = QtWidgets.QPushButton("Send Servo IDs")
-        self.reconfigBtn.clicked.connect(self.send_servo_ids)
-        btn_row.addWidget(self.reconfigBtn)
-
         self.sendBtn = QtWidgets.QPushButton("Send")
         self.sendBtn.clicked.connect(self.send)
         btn_row.addWidget(self.sendBtn)
@@ -1171,14 +1277,15 @@ class ModularJointUI(object):
 
     def build_structure_tab(self):
         tab = QtWidgets.QWidget()
-        outer = QtWidgets.QVBoxLayout(tab)
+        layout = QtWidgets.QHBoxLayout(tab)
+        layout.setSpacing(10)
 
-        card = self.make_card()
-        card_layout = QtWidgets.QVBoxLayout(card)
+        left_card = self.make_card()
+        left_layout = QtWidgets.QVBoxLayout(left_card)
 
         info_lbl = QtWidgets.QLabel("Quick structure editor: choose each joint type and each link length.")
         info_lbl.setWordWrap(True)
-        card_layout.addWidget(info_lbl)
+        left_layout.addWidget(info_lbl)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1230,28 +1337,50 @@ class ModularJointUI(object):
                 row_idx += 1
 
         scroll.setWidget(content)
-        card_layout.addWidget(scroll)
+        left_layout.addWidget(scroll)
 
         btn_row = QtWidgets.QHBoxLayout()
         self.applyStructureBtn = QtWidgets.QPushButton("Apply Structure")
         self.applyStructureBtn.clicked.connect(self.apply_structure)
         btn_row.addWidget(self.applyStructureBtn)
         btn_row.addStretch()
-        card_layout.addLayout(btn_row)
+        left_layout.addLayout(btn_row)
 
-        outer.addWidget(card)
+        right_card = self.make_card()
+        right_layout = QtWidgets.QVBoxLayout(right_card)
+
+        preview_title = QtWidgets.QLabel("3D Preview")
+        preview_font = QtGui.QFont("Segoe UI", 11)
+        preview_font.setBold(True)
+        preview_title.setFont(preview_font)
+        right_layout.addWidget(preview_title)
+
+        preview_info = QtWidgets.QLabel("Preview current structure while editing joint types and link lengths.")
+        preview_info.setWordWrap(True)
+        preview_info.setStyleSheet("color: #cbd5e1;")
+        right_layout.addWidget(preview_info)
+
+        right_layout.addWidget(self.window.struct_toolbar)
+        self.window.struct_canvas.setMinimumHeight(480)
+        self.window.struct_canvas.setStyleSheet("background: #0b1220; border: 1px solid #334155; border-radius: 8px;")
+        right_layout.addWidget(self.window.struct_canvas, 1)
+
+        layout.addWidget(left_card, 3)
+        layout.addWidget(right_card, 2)
+
         self.tabs.addTab(tab, "Structure")
 
     def build_config_tab(self):
         tab = QtWidgets.QWidget()
-        outer = QtWidgets.QVBoxLayout(tab)
+        layout = QtWidgets.QHBoxLayout(tab)
+        layout.setSpacing(10)
 
-        card = self.make_card()
-        card_layout = QtWidgets.QVBoxLayout(card)
+        left_card = self.make_card()
+        left_layout = QtWidgets.QVBoxLayout(left_card)
 
         self.help_lbl = QtWidgets.QLabel("")
         self.help_lbl.setWordWrap(True)
-        card_layout.addWidget(self.help_lbl)
+        left_layout.addWidget(self.help_lbl)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1261,16 +1390,23 @@ class ModularJointUI(object):
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
 
-        headers = ["Joint", "Type", "Axis", "Offset X", "Offset Y", "Offset Z", "Link X", "Link Y", "Link Z", None, None, None]
+        headers = [
+            "Joint", "Type", "Axis",
+            "Offset X", "Offset Y", "Offset Z",
+            "Link X", "Link Y", "Link Z",
+            "Servo Offset", None, None, None
+        ]
         for c, text in enumerate(headers):
             lbl = QtWidgets.QLabel("" if text is None else text)
             lbl.setStyleSheet("color: #93c5fd; font-weight: 700;")
             grid.addWidget(lbl, 0, c)
             if c == 9:
-                self.config_min_header = lbl
+                self.config_offset_header = lbl
             elif c == 10:
-                self.config_max_header = lbl
+                self.config_min_header = lbl
             elif c == 11:
+                self.config_max_header = lbl
+            elif c == 12:
                 self.config_home_header = lbl
 
         for i, m in enumerate(self.modules, start=1):
@@ -1290,11 +1426,12 @@ class ModularJointUI(object):
             lx = QtWidgets.QLineEdit(str(m["link"][0]))
             ly = QtWidgets.QLineEdit(str(m["link"][1]))
             lz = QtWidgets.QLineEdit(str(m["link"][2]))
+            servo_offset_edit = QtWidgets.QLineEdit("" if m["fixed"] else str(m.get("servo_offset_deg", 0.0)))
             qmin_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][0]))
             qmax_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][1]))
             home_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["home_q"]))
 
-            widgets = [name_lbl, type_box, axis_box, ox, oy, oz, lx, ly, lz, qmin_edit, qmax_edit, home_edit]
+            widgets = [name_lbl, type_box, axis_box, ox, oy, oz, lx, ly, lz, servo_offset_edit, qmin_edit, qmax_edit, home_edit]
             for c, w in enumerate(widgets):
                 if hasattr(w, "setMinimumWidth"):
                     w.setMinimumWidth(64)
@@ -1303,6 +1440,7 @@ class ModularJointUI(object):
             if m["fixed"]:
                 type_box.setEnabled(False)
                 axis_box.setEnabled(False)
+                servo_offset_edit.setEnabled(False)
                 qmin_edit.setEnabled(False)
                 qmax_edit.setEnabled(False)
                 home_edit.setEnabled(False)
@@ -1312,22 +1450,44 @@ class ModularJointUI(object):
                 "axis_box": axis_box,
                 "ox": ox, "oy": oy, "oz": oz,
                 "lx": lx, "ly": ly, "lz": lz,
+                "servo_offset_edit": servo_offset_edit,
                 "qmin_edit": qmin_edit,
                 "qmax_edit": qmax_edit,
                 "home_edit": home_edit,
             })
 
         scroll.setWidget(content)
-        card_layout.addWidget(scroll)
+        left_layout.addWidget(scroll)
 
         btn_row = QtWidgets.QHBoxLayout()
         self.applyBtn = QtWidgets.QPushButton("Apply Geometry")
         self.applyBtn.clicked.connect(self.apply_geometry)
         btn_row.addWidget(self.applyBtn)
         btn_row.addStretch()
-        card_layout.addLayout(btn_row)
+        left_layout.addLayout(btn_row)
 
-        outer.addWidget(card)
+        right_card = self.make_card()
+        right_layout = QtWidgets.QVBoxLayout(right_card)
+
+        preview_title = QtWidgets.QLabel("3D Preview")
+        preview_font = QtGui.QFont("Segoe UI", 11)
+        preview_font.setBold(True)
+        preview_title.setFont(preview_font)
+        right_layout.addWidget(preview_title)
+
+        preview_info = QtWidgets.QLabel("Preview current geometry while editing robot configuration.")
+        preview_info.setWordWrap(True)
+        preview_info.setStyleSheet("color: #cbd5e1;")
+        right_layout.addWidget(preview_info)
+
+        right_layout.addWidget(self.window.cfg_toolbar)
+        self.window.cfg_canvas.setMinimumHeight(480)
+        self.window.cfg_canvas.setStyleSheet("background: #0b1220; border: 1px solid #334155; border-radius: 8px;")
+        right_layout.addWidget(self.window.cfg_canvas, 1)
+
+        layout.addWidget(left_card, 3)
+        layout.addWidget(right_card, 2)
+
         self.tabs.addTab(tab, "Configure Robot")
 
     def change_servo_id(self, idx, value):
@@ -1435,6 +1595,7 @@ class ModularJointUI(object):
             row["lx"].setText(str(m["link"][0]))
             row["ly"].setText(str(m["link"][1]))
             row["lz"].setText(str(m["link"][2]))
+            row["servo_offset_edit"].setText(str(m.get("servo_offset_deg", 0.0)))
             if not m["fixed"]:
                 row["qmin_edit"].setText(self.format_angle(m["qlim"][0]))
                 row["qmax_edit"].setText(self.format_angle(m["qlim"][1]))
@@ -1482,6 +1643,7 @@ class ModularJointUI(object):
             self.refresh_structure_fields()
             self.refresh_config_fields()
             self.sync_world_target_to_current()
+            self.view_needs_refit = True
             self.plot_data()
         except Exception as e:
             print("Apply structure error:", e)
@@ -1543,6 +1705,7 @@ class ModularJointUI(object):
                     float(row["ly"].text()),
                     float(row["lz"].text())
                 ], dtype=float)
+                m["servo_offset_deg"] = 0.0 if m["fixed"] else float(row["servo_offset_edit"].text())
 
                 if m["type"] == "none":
                     m["q"] = 0.0
@@ -1562,6 +1725,7 @@ class ModularJointUI(object):
             self.refresh_structure_fields()
             self.refresh_config_fields()
             self.sync_world_target_to_current()
+            self.view_needs_refit = True
             self.plot_data()
         except Exception as e:
             print("Apply geometry error:", e)
@@ -1583,17 +1747,13 @@ class ModularJointUI(object):
         self.sync_world_target_to_current()
         self.plot_data()
 
-    def send_servo_ids(self):
-        self.canStatusLbl.setText("UART: servo IDs are set locally in the GUI")
-        print("[INFO] Servo IDs are assigned in the GUI and used directly for UART sends.")
-
     def get_active_servo_ids(self):
         servo_ids = []
         for m in self.modules:
             if m["fixed"] or m["type"] == "none":
                 continue
             servo_id = int(m.get("servo_id", 0))
-            if 1 <= servo_id <= 254 and servo_id not in servo_ids:
+            if 1 <= servo_id <= MAX_SERVO_ID and servo_id not in servo_ids:
                 servo_ids.append(servo_id)
         return servo_ids
 
@@ -1605,7 +1765,7 @@ class ModularJointUI(object):
             if not self.control_rows[i]["select_box"].isChecked():
                 continue
             servo_id = int(m.get("servo_id", 0))
-            if 1 <= servo_id <= 254 and servo_id not in servo_ids:
+            if 1 <= servo_id <= MAX_SERVO_ID and servo_id not in servo_ids:
                 servo_ids.append(servo_id)
         return servo_ids
 
@@ -1624,7 +1784,7 @@ class ModularJointUI(object):
                     continue
 
                 servo_id = int(m.get("servo_id", 0))
-                if not (1 <= servo_id <= 254):
+                if not (1 <= servo_id <= MAX_SERVO_ID):
                     print(f"[WARN] Skipping {m['name']}: invalid servo_id={servo_id}")
                     continue
 
@@ -1691,7 +1851,6 @@ class ModularJointUI(object):
             self.plot_data()
             self.canStatusLbl.setText(f"UART: read {updated} servo angle(s)")
             print("[READ]", readback)
-
         except Exception as e:
             self.canStatusLbl.setText(f"UART: read failed ({e})")
             print("Read Angles error:", e)
@@ -1733,15 +1892,13 @@ class ModularJointUI(object):
             print("Power Off All error:", e)
 
     def capture_current_pose(self):
-        pose = {
-            "name": f"Pose {len(self.saved_poses) + 1}",
-            "joints": []
-        }
+        pose = {"name": f"Pose {len(self.saved_poses) + 1}", "joints": []}
         for m in self.modules:
             pose["joints"].append({
                 "name": m["name"],
                 "q": float(m["q"]),
                 "servo_id": int(m.get("servo_id", 0)),
+                "servo_offset_deg": float(m.get("servo_offset_deg", 0.0)),
             })
         self.saved_poses.append(pose)
         self.refresh_pose_list()
@@ -1788,6 +1945,7 @@ class ModularJointUI(object):
                 "name": m["name"],
                 "q": float(m["q"]),
                 "servo_id": int(m.get("servo_id", 0)),
+                "servo_offset_deg": float(m.get("servo_offset_deg", 0.0)),
             })
 
         self.refresh_pose_list()
@@ -1809,33 +1967,54 @@ class ModularJointUI(object):
         try:
             X, Y, Z, pts, point_names, frames = forward_kin(self.modules)
 
-            if hasattr(self.window, "ax"):
-                self.window.ax.cla()
-                style_3d_axes(self.window.ax, show_plot_axes=self.show_plot_axes)
+            targets = []
+            if hasattr(self.window, "ax") and hasattr(self.window, "canvas"):
+                targets.append((self.window.ax, self.window.canvas, self.window.fig, True))
+            if hasattr(self.window, "struct_ax") and hasattr(self.window, "struct_canvas"):
+                targets.append((self.window.struct_ax, self.window.struct_canvas, self.window.struct_fig, False))
+            if hasattr(self.window, "cfg_ax") and hasattr(self.window, "cfg_canvas"):
+                targets.append((self.window.cfg_ax, self.window.cfg_canvas, self.window.cfg_fig, False))
 
-                self.window.ax.plot(X, Y, Z, color='#60a5fa', marker='o', linewidth=2.2, markersize=5, label='Arm')
-                self.window.ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='#f87171', s=80, label='End-effector')
-                draw_frame_axes(self.window.ax, frames, show_axes_frames=self.show_frame_axes)
+            for ax, canvas, fig, show_world_target in targets:
+                prev_xlim = ax.get_xlim()
+                prev_ylim = ax.get_ylim()
+                prev_zlim = ax.get_zlim()
+
+                ax.cla()
+                style_3d_axes(ax, show_plot_axes=self.show_plot_axes)
+
+                ax.plot(X, Y, Z, color='#60a5fa', marker='o', linewidth=2.2, markersize=5, label='Arm')
+                ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='#f87171', s=80, label='End-effector')
+                draw_frame_axes(ax, frames, show_axes_frames=self.show_frame_axes)
 
                 for i, (x, y, z) in enumerate(pts):
-                    self.window.ax.text(x, y, z + 0.02, point_names[i], fontsize=8, color='#e5e7eb')
+                    ax.text(x, y, z + 0.02, point_names[i], fontsize=8, color='#e5e7eb')
 
-                if self.control_mode == "World":
-                    self.window.ax.scatter(
+                if show_world_target and self.control_mode == "World":
+                    ax.scatter(
                         [self.world_target[0]], [self.world_target[1]], [self.world_target[2]],
                         c='#fbbf24', s=45, marker='x'
                     )
 
-                auto_fit_axes_cube(self.window.ax, X, Y, Z, scale=1.5, min_cube=0.4)
-                self.window.ax.view_init(elev=22, azim=-58)
+                if self.view_needs_refit:
+                    auto_fit_axes_cube(ax, X, Y, Z, scale=1.5, min_cube=0.4)
+                else:
+                    ax.set_xlim(prev_xlim)
+                    ax.set_ylim(prev_ylim)
+                    ax.set_zlim(prev_zlim)
+                    ax.set_box_aspect((1, 1, 1))
 
-                leg = self.window.ax.legend(facecolor="#111827", edgecolor="#475569")
+                ax.view_init(elev=22, azim=-58)
+
+                leg = ax.legend(facecolor="#111827", edgecolor="#475569")
                 for txt in leg.get_texts():
                     txt.set_color("#e5e7eb")
 
-                self.window.fig.tight_layout()
-                self.window.canvas.draw()
-                self.posLbl.setText(f"End-effector: X={X[-1]:.3f}, Y={Y[-1]:.3f}, Z={Z[-1]:.3f}")
+                fig.tight_layout()
+                canvas.draw()
+
+            self.view_needs_refit = False
+            self.posLbl.setText(f"End-effector: X={X[-1]:.3f}, Y={Y[-1]:.3f}, Z={Z[-1]:.3f}")
         except Exception as e:
             print("Plot error:", e)
 
