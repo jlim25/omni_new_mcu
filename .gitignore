@@ -65,3 +65,4 @@ Release/
 
 # Python
 uv.lock
+__pycache__/
