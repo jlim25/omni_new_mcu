@@ -48,16 +48,159 @@ LINK_PRESETS_M = {
 
 
 SERVO_CAL = {
-    "J1":   {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 360.0, "invert": False},
-    "J2":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J3":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J4":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J5":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J6":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J7":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "J8":   {"joint_min": -120.0, "joint_max": 120.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
-    "GRIP": {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 360.0, "invert": False},
+    "J1": {
+        "joint_min": -180.0,
+        "joint_max": 180.0,
+        "servo_min": 0.0,
+        "servo_max": 360.0,
+        "invert": False,
+        "gear_ratio": 2.0,
+    },
+    "J2": {
+        "joint_min": -120.0,
+        "joint_max": 120.0,
+        "servo_min": 0.0,
+        "servo_max": 240.0,
+        "invert": False,
+        "gear_ratio": 1.0,
+    },
+    "J3": {
+        "joint_min": -120.0,
+        "joint_max": 120.0,
+        "servo_min": 0.0,
+        "servo_max": 240.0,
+        "invert": False,
+        "gear_ratio": 1.0,
+    },
+    "J4": {
+        "joint_min": -120.0,
+        "joint_max": 120.0,
+        "servo_min": 0.0,
+        "servo_max": 240.0,
+        "invert": False,
+        "gear_ratio": 1.0,
+    },
+    "J5": {
+        "joint_min": -120.0,
+        "joint_max": 120.0,
+        "servo_min": 0.0,
+        "servo_max": 240.0,
+        "invert": False,
+        "gear_ratio": 1.0,
+    },
+    "J6": {
+        "joint_min": -120.0,
+        "joint_max": 120.0,
+        "servo_min": 0.0,
+        "servo_max": 240.0,
+        "invert": False,
+        "gear_ratio": 1.0,
+    },
+    "J7": {
+        "joint_min": -120.0,
+        "joint_max": 120.0,
+        "servo_min": 0.0,
+        "servo_max": 240.0,
+        "invert": False,
+        "gear_ratio": 1.0,
+    },
+    "J8": {
+        "joint_min": -120.0,
+        "joint_max": 120.0,
+        "servo_min": 0.0,
+        "servo_max": 240.0,
+        "invert": False,
+        "gear_ratio": 1.0,
+    },
+    "GRIP": {
+        "joint_min": -180.0,
+        "joint_max": 180.0,
+        "servo_min": 0.0,
+        "servo_max": 360.0,
+        "invert": False,
+        "gear_ratio": 1.0,
+    },
 }
+
+
+def joint_to_servo_deg(module):
+    joint_name = module["name"]
+    joint_rad = module["q"]
+
+    if joint_name not in SERVO_CAL:
+        return None
+
+    c = dict(SERVO_CAL[joint_name])
+
+    if module["type"] == "swivel":
+        c["joint_min"] = -180.0
+        c["joint_max"] = 180.0
+        c["servo_min"] = 0.0
+        c["servo_max"] = 360.0
+
+    joint_deg = math.degrees(joint_rad)
+
+    if c.get("invert", False):
+        joint_deg = -joint_deg
+
+    gear_ratio = float(c.get("gear_ratio", 1.0))
+    if abs(gear_ratio) < 1e-9:
+        gear_ratio = 1.0
+
+    servo_side_joint_deg = joint_deg / gear_ratio
+    servo_side_joint_min = c["joint_min"] / gear_ratio
+    servo_side_joint_max = c["joint_max"] / gear_ratio
+
+    servo_deg = map_range(
+        servo_side_joint_deg,
+        servo_side_joint_min, servo_side_joint_max,
+        c["servo_min"], c["servo_max"]
+    )
+
+    return clamp(servo_deg, c["servo_min"], c["servo_max"])
+
+
+def servo_deg_to_joint_rad(module, servo_deg):
+    joint_name = module["name"]
+
+    if joint_name not in SERVO_CAL:
+        return None
+
+    c = dict(SERVO_CAL[joint_name])
+
+    if module["type"] == "swivel":
+        c["joint_min"] = -180.0
+        c["joint_max"] = 180.0
+        c["servo_min"] = 0.0
+        c["servo_max"] = 360.0
+
+    gear_ratio = float(c.get("gear_ratio", 1.0))
+    if abs(gear_ratio) < 1e-9:
+        gear_ratio = 1.0
+
+    servo_side_joint_min = c["joint_min"] / gear_ratio
+    servo_side_joint_max = c["joint_max"] / gear_ratio
+
+    servo_side_joint_deg = map_range(
+        float(servo_deg),
+        c["servo_min"], c["servo_max"],
+        servo_side_joint_min, servo_side_joint_max
+    )
+
+    joint_deg = servo_side_joint_deg * gear_ratio
+
+    if c.get("invert", False):
+        joint_deg = -joint_deg
+
+    joint_rad = math.radians(joint_deg)
+
+    if not module["fixed"] and module["type"] != "none":
+        qmin, qmax = module["qlim"]
+        joint_rad = clamp(joint_rad, qmin, qmax)
+
+    return joint_rad
+
+
 
 
 def default_servo_id_for_name(name):
