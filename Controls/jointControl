@@ -1,0 +1,726 @@
+# -*- coding: utf-8 -*-
+
+from PyQt5 import QtCore, QtGui, QtWidgets
+import sys
+import os
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+MODULE_TYPES = {
+    "none": {
+        "joint_kind": "N",
+        "alpha": 0.0,
+        "theta_offset": 0.0,
+        "default_limits": (0.0, 0.0),
+    },
+    "swivel": {
+        "joint_kind": "R",
+        "alpha": 0.0,
+        "theta_offset": 0.0,
+        "default_limits": (-math.pi, math.pi),
+    },
+    "rotation": {
+        "joint_kind": "R",
+        "alpha": 0.0,
+        "theta_offset": 0.0,
+        "default_limits": (-math.pi / 2, math.pi / 2),
+    }
+}
+
+ROBOT_CONFIG = [
+    {"name": "J1", "type": "swivel",   "a": 0.0,  "d": 0.75,  "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "J2", "type": "rotation", "a": 0.0,  "d": 0.0,   "z_world": 0.3, "alpha": -math.pi / 2, "theta_offset": -math.pi / 2, "q": 0.0, "home_q": 0.0},
+    {"name": "J3", "type": "rotation", "a": 1, "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "J4", "type": "rotation", "a": 1,  "d": 1.5,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "J5", "type": "none",     "a": 0,  "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "J6", "type": "none",     "a": 0,  "d": 0.0,   "z_world": 0.0, "alpha": 0.0,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0},
+    {"name": "GRIP","type": "swivel",  "a": 1,  "d": 0.0, "z_world": 0.0, "alpha": 1.571,          "theta_offset": 0.0, "q": 0.0, "home_q": 0.0, "fixed": True},
+]
+
+SERVO_CAL = {
+    "J1":   {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J2":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J3":   {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "J4":   {"joint_min": -90.0,  "joint_max": 90.0,  "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+    "GRIP": {"joint_min": -180.0, "joint_max": 180.0, "servo_min": 0.0, "servo_max": 240.0, "invert": False},
+}
+
+def build_modules(config):
+    modules = []
+    for item in config:
+        meta = MODULE_TYPES[item["type"]]
+        modules.append({
+            "name": item["name"],
+            "type": item["type"],
+            "joint_kind": meta["joint_kind"],
+            "alpha": float(item.get("alpha", meta["alpha"])),
+            "theta_offset": float(item.get("theta_offset", meta["theta_offset"])),
+            "a": float(item.get("a", 0.0)),
+            "d": float(item.get("d", 0.0)),
+            "z_world": float(item.get("z_world", 0.0)),
+            "q": float(item.get("q", 0.0)),
+            "home_q": float(item.get("home_q", 0.0)),
+            "qlim": tuple(item.get("qlim", meta["default_limits"])),
+            "fixed": bool(item.get("fixed", False)),
+        })
+    return modules
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+def map_range(x, in_min, in_max, out_min, out_max):
+    if abs(in_max - in_min) < 1e-9:
+        return out_min
+    return out_min + (x - in_min) * (out_max - out_min) / (in_max - in_min)
+
+def joint_to_servo_deg(joint_name, joint_rad):
+    if joint_name not in SERVO_CAL:
+        return None
+    c = SERVO_CAL[joint_name]
+    joint_deg = math.degrees(joint_rad)
+    if c.get("invert", False):
+        joint_deg = -joint_deg
+    servo_deg = map_range(
+        joint_deg,
+        c["joint_min"], c["joint_max"],
+        c["servo_min"], c["servo_max"]
+    )
+    return clamp(servo_deg, c["servo_min"], c["servo_max"])
+
+def auto_geom_from_types(prev_type, curr_type):
+    if curr_type == "none":
+        return 0.0, 0.0, 0.0, 0.0
+
+    if prev_type == "none":
+        if curr_type == "swivel":
+            return 0.0, 1.0, 0.0, 0.0
+        if curr_type == "rotation":
+            return 1.0, 0.0, 0.0, 0.0
+
+    if prev_type == "swivel" and curr_type == "swivel":
+        return 0.0, 1.0, 0.0, 0.0
+
+    if prev_type == "swivel" and curr_type == "rotation":
+        return 1.0, 0.0, -math.pi / 2, 0.0
+
+    if prev_type == "rotation" and curr_type == "rotation":
+        return 1.0, 0.0, 0.0, 0.0
+
+    if prev_type == "rotation" and curr_type == "swivel":
+        return 0.0, 1.0, math.pi / 2, 0.0
+
+    return 0.0, 1.0, 0.0, 0.0
+
+def pose(theta, alpha, a, d):
+    c, s = math.cos(theta), math.sin(theta)
+    ca, sa = math.cos(alpha), math.sin(alpha)
+    return np.array([
+        [c,    -s,    0.0,  a],
+        [s*ca,  c*ca, -sa,  -d*sa],
+        [s*sa,  c*sa,  ca,   d*ca],
+        [0.0,   0.0,  0.0,  1.0]
+    ], dtype=float)
+
+def forward_kin(modules):
+    T = np.eye(4)
+    pts = [(0.0, 0.0, 0.0)]
+    point_names = ["BASE"]
+
+    for m in modules:
+        if m["type"] == "none":
+            continue
+
+        theta = m["theta_offset"] + (0.0 if m["fixed"] else m["q"])
+        T = T @ pose(theta, m["alpha"], m["a"], m["d"])
+        T[2, 3] += m["z_world"]
+
+        pts.append((float(T[0, 3]), float(T[1, 3]), float(T[2, 3])))
+        point_names.append(m["name"])
+
+    X = np.array([p[0] for p in pts], dtype=float)
+    Y = np.array([p[1] for p in pts], dtype=float)
+    Z = np.array([p[2] for p in pts], dtype=float)
+    return X, Y, Z, pts, point_names
+
+def create_plot():
+    fig = plt.figure(figsize=(7, 5))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_xlabel('X (m)')
+    ax.set_ylabel('Y (m)')
+    ax.set_zlabel('Z (m)')
+    ax.set_xlim([-4, 4])
+    ax.set_ylim([-4, 4])
+    ax.set_zlim([0, 5])
+    ax.set_autoscale_on(False)
+    return fig, ax
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.fig, self.ax = create_plot()
+        plt.ion()
+
+class ModularJointUI(object):
+    def setupUi(self, win):
+        self.window = win
+        self.modules = build_modules(ROBOT_CONFIG)
+        self.control_rows = []
+        self.config_rows = []
+        self.unit_mode = "Radians"
+        self.step_rad = 0.05
+
+        win.setWindowTitle("Modular Joint Control")
+        win.resize(1480, 780)
+
+        central = QtWidgets.QWidget()
+        win.setCentralWidget(central)
+        root = QtWidgets.QVBoxLayout(central)
+
+        title = QtWidgets.QLabel("Modular Joint Control")
+        title.setFont(QtGui.QFont("Roboto Slab", 18))
+        root.addWidget(title)
+
+        top_row = QtWidgets.QHBoxLayout()
+
+        unit_lbl = QtWidgets.QLabel("Angle units:")
+        self.unitBox = QtWidgets.QComboBox()
+        self.unitBox.addItems(["Radians", "Degrees"])
+        self.unitBox.setCurrentText(self.unit_mode)
+        self.unitBox.currentTextChanged.connect(self.change_unit_mode)
+
+        step_lbl = QtWidgets.QLabel("Step size:")
+        self.stepSpin = QtWidgets.QDoubleSpinBox()
+        self.stepSpin.setDecimals(3)
+        self.stepSpin.setRange(0.001, 360.0)
+        self.stepSpin.setSingleStep(0.01)
+        self.stepSpin.valueChanged.connect(self.change_step_size)
+
+        self.stepUnitLbl = QtWidgets.QLabel()
+        self.posLbl = QtWidgets.QLabel("End-effector: X=0.000, Y=0.000, Z=0.000")
+
+        top_row.addWidget(unit_lbl)
+        top_row.addWidget(self.unitBox)
+        top_row.addSpacing(20)
+        top_row.addWidget(step_lbl)
+        top_row.addWidget(self.stepSpin)
+        top_row.addWidget(self.stepUnitLbl)
+        top_row.addSpacing(20)
+        top_row.addWidget(self.posLbl)
+        top_row.addStretch()
+
+        root.addLayout(top_row)
+
+        self.tabs = QtWidgets.QTabWidget()
+        root.addWidget(self.tabs)
+
+        self.icon_up = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, "up.png")))
+        self.icon_down = QtGui.QIcon(QtGui.QPixmap(os.path.join(BASE_DIR, "down.png")))
+
+        self.build_control_tab()
+        self.build_config_tab()
+
+        self.refresh_step_spin()
+        self.plot_data()
+
+    def angle_to_display(self, rad_value):
+        return math.degrees(rad_value) if self.unit_mode == "Degrees" else rad_value
+
+    def angle_from_display(self, shown_value):
+        return math.radians(shown_value) if self.unit_mode == "Degrees" else shown_value
+
+    def angle_unit_short(self):
+        return "deg" if self.unit_mode == "Degrees" else "rad"
+
+    def format_angle(self, rad_value, decimals=3):
+        return f'{self.angle_to_display(rad_value):.{decimals}f}'
+
+    def refresh_step_spin(self):
+        self.stepSpin.blockSignals(True)
+
+        if self.unit_mode == "Degrees":
+            self.stepSpin.setDecimals(2)
+            self.stepSpin.setRange(0.01, 360.0)
+            self.stepSpin.setSingleStep(1.0)
+            self.stepSpin.setValue(math.degrees(self.step_rad))
+        else:
+            self.stepSpin.setDecimals(3)
+            self.stepSpin.setRange(0.001, 6.283)
+            self.stepSpin.setSingleStep(0.01)
+            self.stepSpin.setValue(self.step_rad)
+
+        self.stepSpin.blockSignals(False)
+        self.stepUnitLbl.setText(self.angle_unit_short())
+
+    def change_step_size(self, shown_value):
+        self.step_rad = self.angle_from_display(shown_value)
+        self.refresh_headers()
+
+    def change_unit_mode(self, new_unit):
+        self.unit_mode = new_unit
+        self.refresh_step_spin()
+        self.refresh_headers()
+        self.refresh_all_control_rows()
+        self.refresh_config_angle_fields()
+
+    def refresh_headers(self):
+        self.control_angle_header.setText(f"Angle ({self.angle_unit_short()})")
+        self.control_aux_header.setText("Servo (0-240)")
+        self.config_alpha_header.setText(f"alpha ({self.angle_unit_short()})")
+        self.config_theta_header.setText(f"theta_offset ({self.angle_unit_short()})")
+        self.config_min_header.setText(f"Min ({self.angle_unit_short()})")
+        self.config_max_header.setText(f"Max ({self.angle_unit_short()})")
+        self.config_home_header.setText(f"Home ({self.angle_unit_short()})")
+        self.help_units_lbl.setText(
+            f"a = local link offset\n"
+            f"d = local joint-axis offset\n"
+            f"z_world = extra absolute vertical shift in world Z\n"
+            f"alpha = twist between consecutive active joints; auto layout fills a starting value ({self.angle_unit_short()})\n"
+            f"theta_offset = mounting zero offset; auto layout also fills a starting value ({self.angle_unit_short()})\n"
+            f"Auto layout leaves J1 and J2 unchanged, then fills later joints from joint-type transitions\n"
+            f"Swivel limits default to full 360 degrees\n"
+            f"Control step = {self.angle_to_display(self.step_rad):.3f} {self.angle_unit_short()}"
+        )
+
+    def build_control_tab(self):
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(tab)
+
+        left_panel = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left_panel)
+
+        subtitle = QtWidgets.QLabel("Joint angles")
+        subtitle.setFont(QtGui.QFont("Roboto Slab", 12))
+        left_layout.addWidget(subtitle)
+
+        grid_wrap = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(grid_wrap)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        headers = ["Joint", "Type", "Down", None, "Up", "Servo (0-240)"]
+        for c, text in enumerate(headers):
+            lbl = QtWidgets.QLabel("" if text is None else text)
+            lbl.setFont(QtGui.QFont("Roboto Slab", 10))
+            grid.addWidget(lbl, 0, c)
+            if c == 3:
+                self.control_angle_header = lbl
+            if c == 5:
+                self.control_aux_header = lbl
+
+        for i, m in enumerate(self.modules, start=1):
+            name_lbl = QtWidgets.QLabel(m["name"])
+            type_lbl = QtWidgets.QLabel(m["type"])
+
+            down_btn = QtWidgets.QPushButton()
+            down_btn.setIcon(self.icon_down)
+            down_btn.setIconSize(QtCore.QSize(28, 28))
+            down_btn.setFixedSize(40, 40)
+
+            angle_lbl = QtWidgets.QLabel()
+            angle_lbl.setFrameShape(QtWidgets.QFrame.Box)
+            angle_lbl.setAlignment(QtCore.Qt.AlignCenter)
+            angle_lbl.setMinimumWidth(95)
+            angle_lbl.setMinimumHeight(36)
+
+            up_btn = QtWidgets.QPushButton()
+            up_btn.setIcon(self.icon_up)
+            up_btn.setIconSize(QtCore.QSize(28, 28))
+            up_btn.setFixedSize(40, 40)
+
+            aux_lbl = QtWidgets.QLabel()
+            aux_lbl.setAlignment(QtCore.Qt.AlignCenter)
+            aux_lbl.setMinimumWidth(90)
+
+            if not m["fixed"]:
+                down_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, -self.step_rad))
+                up_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, self.step_rad))
+            else:
+                down_btn.setEnabled(False)
+                up_btn.setEnabled(False)
+
+            widgets = [name_lbl, type_lbl, down_btn, angle_lbl, up_btn, aux_lbl]
+            for c, w in enumerate(widgets):
+                grid.addWidget(w, i, c)
+
+            self.control_rows.append({
+                "type_lbl": type_lbl,
+                "down_btn": down_btn,
+                "angle_lbl": angle_lbl,
+                "up_btn": up_btn,
+                "aux_lbl": aux_lbl,
+                "name_lbl": name_lbl,
+            })
+
+        left_layout.addWidget(grid_wrap)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.resetBtn = QtWidgets.QPushButton("Reset angles")
+        self.resetBtn.clicked.connect(self.reset_angles)
+        btn_row.addWidget(self.resetBtn)
+
+        self.sendBtn = QtWidgets.QPushButton("Send")
+        self.sendBtn.clicked.connect(self.send)
+        btn_row.addWidget(self.sendBtn)
+
+        btn_row.addStretch()
+        left_layout.addLayout(btn_row)
+
+        note = QtWidgets.QLabel(
+            "Angle shows robot joint value. Right column shows the mapped servo command from 0 to 240."
+        )
+        note.setWordWrap(True)
+        left_layout.addWidget(note)
+
+        layout.addWidget(left_panel, 3)
+
+        right_panel = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_panel)
+        plot_info = QtWidgets.QLabel(
+            "Live arm preview\n"
+            "Blue line: links\n"
+            "Red point: end-effector\n"
+            "Labels are shown only for active chain points\n"
+            "Swivel and rotation use different auto-assigned frame twists"
+        )
+        plot_info.setAlignment(QtCore.Qt.AlignTop)
+        right_layout.addWidget(plot_info)
+        layout.addWidget(right_panel, 2)
+
+        self.tabs.addTab(tab, "Control")
+        self.refresh_all_control_rows()
+
+    def build_config_tab(self):
+        tab = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(tab)
+
+        help_lbl = QtWidgets.QLabel(
+            "Edit module type, geometry, world-Z offsets, limits, and home angles below. Auto layout preserves J1 and J2, then fills a, d, alpha, and theta_offset for later joints."
+        )
+        help_lbl.setWordWrap(True)
+        outer.addWidget(help_lbl)
+
+        self.help_units_lbl = QtWidgets.QLabel("")
+        self.help_units_lbl.setWordWrap(True)
+        self.help_units_lbl.setStyleSheet("color: #333333;")
+        outer.addWidget(self.help_units_lbl)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        content = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(content)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        headers = ["Joint", "Type", "a (m)", "d (m)", "z_world (m)", None, None, None, None, None]
+        for c, text in enumerate(headers):
+            lbl = QtWidgets.QLabel("" if text is None else text)
+            lbl.setFont(QtGui.QFont("Roboto Slab", 10))
+            grid.addWidget(lbl, 0, c)
+
+            if c == 5:
+                self.config_alpha_header = lbl
+            elif c == 6:
+                self.config_theta_header = lbl
+            elif c == 7:
+                self.config_min_header = lbl
+            elif c == 8:
+                self.config_max_header = lbl
+            elif c == 9:
+                self.config_home_header = lbl
+
+        for i, m in enumerate(self.modules, start=1):
+            name_lbl = QtWidgets.QLabel(m["name"])
+
+            type_box = QtWidgets.QComboBox()
+            type_box.addItems(["none", "swivel", "rotation"])
+            type_box.setCurrentText(m["type"])
+
+            a_edit = QtWidgets.QLineEdit(str(m["a"]))
+            d_edit = QtWidgets.QLineEdit(str(m["d"]))
+            z_world_edit = QtWidgets.QLineEdit(str(m["z_world"]))
+            alpha_edit = QtWidgets.QLineEdit(self.format_angle(m["alpha"]))
+            theta_offset_edit = QtWidgets.QLineEdit(self.format_angle(m["theta_offset"]))
+            qmin_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][0]))
+            qmax_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][1]))
+            home_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["home_q"]))
+
+            for widget in [a_edit, d_edit, z_world_edit, alpha_edit, theta_offset_edit, qmin_edit, qmax_edit, home_edit]:
+                widget.setMinimumWidth(88)
+
+            if m["fixed"]:
+                type_box.setEnabled(False)
+                qmin_edit.setEnabled(False)
+                qmax_edit.setEnabled(False)
+                home_edit.setEnabled(False)
+
+            widgets = [
+                name_lbl, type_box, a_edit, d_edit, z_world_edit,
+                alpha_edit, theta_offset_edit, qmin_edit, qmax_edit, home_edit
+            ]
+            for c, w in enumerate(widgets):
+                grid.addWidget(w, i, c)
+
+            row_info = {
+                "type_box": type_box,
+                "a_edit": a_edit,
+                "d_edit": d_edit,
+                "z_world_edit": z_world_edit,
+                "alpha_edit": alpha_edit,
+                "theta_offset_edit": theta_offset_edit,
+                "qmin_edit": qmin_edit,
+                "qmax_edit": qmax_edit,
+                "home_edit": home_edit,
+            }
+            self.config_rows.append(row_info)
+
+            if not m["fixed"]:
+                type_box.currentTextChanged.connect(lambda _, idx=i-1: self.on_type_changed(idx))
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.autoLayoutBtn = QtWidgets.QPushButton("Auto layout")
+        self.autoLayoutBtn.clicked.connect(self.auto_fill_geometry)
+        btn_row.addWidget(self.autoLayoutBtn)
+
+        self.applyBtn = QtWidgets.QPushButton("Apply geometry")
+        self.applyBtn.clicked.connect(self.apply_geometry)
+        btn_row.addWidget(self.applyBtn)
+
+        self.homeBtn = QtWidgets.QPushButton("Go Home")
+        self.homeBtn.clicked.connect(self.go_home)
+        btn_row.addWidget(self.homeBtn)
+
+        btn_row.addStretch()
+        outer.addLayout(btn_row)
+
+        self.tabs.addTab(tab, "Configure Robot")
+
+        for i, m in enumerate(self.modules):
+            if not m["fixed"]:
+                self.update_config_row_state(i)
+
+        self.refresh_headers()
+        self.refresh_config_angle_fields()
+
+    def auto_fill_geometry(self):
+        prev_type = "none"
+
+        for i, row in enumerate(self.config_rows):
+            curr_type = row["type_box"].currentText()
+
+            if i < 2:
+                if curr_type != "none":
+                    prev_type = curr_type
+                self.update_config_row_state(i)
+                continue
+
+            a_val, d_val, alpha_val, theta_offset_val = auto_geom_from_types(prev_type, curr_type)
+
+            if curr_type == "none":
+                row["a_edit"].setText("0.000")
+                row["d_edit"].setText("0.000")
+                row["alpha_edit"].setText(self.format_angle(0.0))
+                row["theta_offset_edit"].setText(self.format_angle(0.0))
+            else:
+                row["a_edit"].setText(f"{a_val:.3f}")
+                row["d_edit"].setText(f"{d_val:.3f}")
+                row["alpha_edit"].setText(self.format_angle(alpha_val))
+                row["theta_offset_edit"].setText(self.format_angle(theta_offset_val))
+                prev_type = curr_type
+
+            self.update_config_row_state(i)
+
+    def on_type_changed(self, idx):
+        row = self.config_rows[idx]
+        mtype = row["type_box"].currentText()
+
+        if idx >= 2:
+            if mtype == "none":
+                row["qmin_edit"].setText(self.format_angle(0.0))
+                row["qmax_edit"].setText(self.format_angle(0.0))
+                row["home_edit"].setText(self.format_angle(0.0))
+            else:
+                meta = MODULE_TYPES[mtype]
+                row["qmin_edit"].setText(self.format_angle(meta["default_limits"][0]))
+                row["qmax_edit"].setText(self.format_angle(meta["default_limits"][1]))
+                row["home_edit"].setText(self.format_angle(0.0))
+
+        self.update_config_row_state(idx)
+        self.auto_fill_geometry()
+
+    def update_config_row_state(self, idx):
+        row = self.config_rows[idx]
+        is_none = (row["type_box"].currentText() == "none")
+        row["qmin_edit"].setEnabled(not is_none)
+        row["qmax_edit"].setEnabled(not is_none)
+        row["home_edit"].setEnabled(not is_none)
+
+    def refresh_config_angle_fields(self):
+        for i, m in enumerate(self.modules):
+            row = self.config_rows[i]
+            row["alpha_edit"].setText(self.format_angle(m["alpha"]))
+            row["theta_offset_edit"].setText(self.format_angle(m["theta_offset"]))
+
+            if not m["fixed"]:
+                row["qmin_edit"].setText(self.format_angle(m["qlim"][0]))
+                row["qmax_edit"].setText(self.format_angle(m["qlim"][1]))
+                row["home_edit"].setText(self.format_angle(m["home_q"]))
+
+    def change_angle(self, idx, delta_rad):
+        m = self.modules[idx]
+        if m["fixed"] or m["type"] == "none":
+            return
+        qmin, qmax = m["qlim"]
+        m["q"] = max(qmin, min(qmax, round(m["q"] + delta_rad, 6)))
+        self.refresh_control_row(idx)
+        self.plot_data()
+
+    def refresh_control_row(self, idx):
+        m = self.modules[idx]
+        row = self.control_rows[idx]
+        row["type_lbl"].setText(m["type"])
+
+        if m["fixed"]:
+            row["angle_lbl"].setText("fixed")
+            servo_deg = joint_to_servo_deg(m["name"], m["q"])
+            row["aux_lbl"].setText("-" if servo_deg is None else f'{servo_deg:.1f}')
+            row["down_btn"].setEnabled(False)
+            row["up_btn"].setEnabled(False)
+            row["name_lbl"].setStyleSheet("")
+            row["type_lbl"].setStyleSheet("")
+            row["angle_lbl"].setStyleSheet("")
+        elif m["type"] == "none":
+            row["angle_lbl"].setText("unused")
+            row["aux_lbl"].setText("-")
+            row["down_btn"].setEnabled(False)
+            row["up_btn"].setEnabled(False)
+            row["name_lbl"].setStyleSheet("color: gray;")
+            row["type_lbl"].setStyleSheet("color: gray;")
+            row["angle_lbl"].setStyleSheet("color: gray;")
+        else:
+            row["angle_lbl"].setText(f'{self.angle_to_display(m["q"]):.2f}')
+            servo_deg = joint_to_servo_deg(m["name"], m["q"])
+            row["aux_lbl"].setText("-" if servo_deg is None else f'{servo_deg:.1f}')
+            row["down_btn"].setEnabled(True)
+            row["up_btn"].setEnabled(True)
+            row["name_lbl"].setStyleSheet("")
+            row["type_lbl"].setStyleSheet("")
+            row["angle_lbl"].setStyleSheet("")
+
+    def refresh_all_control_rows(self):
+        for i in range(len(self.modules)):
+            self.refresh_control_row(i)
+
+    def apply_geometry(self):
+        try:
+            for i, m in enumerate(self.modules):
+                row = self.config_rows[i]
+                mtype = row["type_box"].currentText()
+                meta = MODULE_TYPES[mtype]
+
+                m["type"] = mtype
+                m["joint_kind"] = meta["joint_kind"]
+                m["a"] = float(row["a_edit"].text())
+                m["d"] = float(row["d_edit"].text())
+                m["z_world"] = float(row["z_world_edit"].text())
+                m["alpha"] = self.angle_from_display(float(row["alpha_edit"].text()))
+                m["theta_offset"] = self.angle_from_display(float(row["theta_offset_edit"].text()))
+
+                if m["type"] == "none":
+                    m["q"] = 0.0
+                    m["home_q"] = 0.0
+                    m["qlim"] = (0.0, 0.0)
+                elif not m["fixed"]:
+                    qmin = self.angle_from_display(float(row["qmin_edit"].text()))
+                    qmax = self.angle_from_display(float(row["qmax_edit"].text()))
+                    home_q = self.angle_from_display(float(row["home_edit"].text()))
+
+                    if qmin > qmax:
+                        qmin, qmax = qmax, qmin
+
+                    m["qlim"] = (qmin, qmax)
+                    m["home_q"] = max(qmin, min(qmax, home_q))
+                    m["q"] = max(qmin, min(qmax, m["q"]))
+
+            self.refresh_all_control_rows()
+            self.refresh_config_angle_fields()
+            self.plot_data()
+        except Exception as e:
+            print("Apply geometry error:", e)
+
+    def go_home(self):
+        for m in self.modules:
+            if not m["fixed"] and m["type"] != "none":
+                qmin, qmax = m["qlim"]
+                m["q"] = max(qmin, min(qmax, m["home_q"]))
+        self.refresh_all_control_rows()
+        self.plot_data()
+
+    def reset_angles(self):
+        for m in self.modules:
+            if not m["fixed"] and m["type"] != "none":
+                m["q"] = 0.0
+        self.refresh_all_control_rows()
+        self.plot_data()
+
+    def send(self):
+        try:
+            values = []
+            for m in self.modules:
+                if m["fixed"] or m["type"] == "none":
+                    continue
+
+                servo_deg = joint_to_servo_deg(m["name"], m["q"])
+                if servo_deg is not None:
+                    values.append(servo_deg)
+
+            data = ",".join(f"{v:.1f}" for v in values)
+            print("SEND:", data)
+        except Exception as e:
+            print("Send error:", e)
+
+    def plot_data(self):
+        try:
+            X, Y, Z, pts, point_names = forward_kin(self.modules)
+
+            if hasattr(self.window, "ax"):
+                self.window.ax.cla()
+                self.window.ax.plot(X, Y, Z, 'b-o', linewidth=2, markersize=5, label='Arm')
+                self.window.ax.scatter([X[-1]], [Y[-1]], [Z[-1]], c='r', s=90, label='End-effector')
+
+                for i, (x, y, z) in enumerate(pts):
+                    self.window.ax.text(x, y, z + 0.05, point_names[i], fontsize=9, color='black')
+
+                self.window.ax.set_xlabel('X (m)')
+                self.window.ax.set_ylabel('Y (m)')
+                self.window.ax.set_zlabel('Z (m)')
+                self.window.ax.set_xlim([-4, 4])
+                self.window.ax.set_ylim([-4, 4])
+                self.window.ax.set_zlim([0, 5])
+                self.window.ax.legend()
+                self.window.fig.canvas.draw()
+
+                self.posLbl.setText(
+                    f'End-effector: X={X[-1]:.3f}, Y={Y[-1]:.3f}, Z={Z[-1]:.3f}'
+                )
+        except Exception as e:
+            print("Plot error:", e)
+
+def main():
+    app = QtWidgets.QApplication(sys.argv)
+    win = MainWindow()
+    ui = ModularJointUI()
+    ui.setupUi(win)
+    win.show()
+    plt.show()
+    sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()
