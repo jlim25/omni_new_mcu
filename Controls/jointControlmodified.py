@@ -596,7 +596,7 @@ def apply_app_style(app):
             background-color: #475569;
             color: #cbd5e1;
         }
-        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QListWidget {
             background-color: #111827;
             color: #e5e7eb;
             border: 1px solid #334155;
@@ -604,7 +604,7 @@ def apply_app_style(app):
             padding: 5px 7px;
             min-height: 28px;
         }
-        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QListWidget:focus {
             border: 1px solid #60a5fa;
         }
         QComboBox::drop-down {
@@ -706,6 +706,7 @@ class ModularJointUI(object):
         self.control_rows = []
         self.structure_rows = []
         self.config_rows = []
+        self.saved_poses = []
 
         self.uart_ready = False
 
@@ -865,6 +866,7 @@ class ModularJointUI(object):
         self.refresh_config_fields()
         self.refresh_world_fields()
         self.refresh_control_mode_ui()
+        self.refresh_pose_list()
 
     def change_joint_count(self, new_count):
         old_modules = self.modules
@@ -908,7 +910,7 @@ class ModularJointUI(object):
         self.config_home_header.setText(f"Home ({self.angle_unit_short()})")
         self.help_lbl.setText(
             "Rotation joints use 240-degree servo mapping and swivel joints use 360-degree mapping. "
-            "Send transmits current GUI pose over Hiwonder UART."
+            "Read Angles queries the Hiwonder controller using the configured Servo ID values."
         )
 
     def make_card(self):
@@ -935,12 +937,12 @@ class ModularJointUI(object):
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
 
-        headers = ["Joint", "Type", "Axis", "Servo ID", "Down", None, "Up", "Servo Cmd"]
+        headers = ["Joint", "Type", "Axis", "Servo ID", "Select", "Down", None, "Up", "Servo Cmd"]
         for c, text in enumerate(headers):
             lbl = QtWidgets.QLabel("" if text is None else text)
             lbl.setStyleSheet("color: #93c5fd; font-weight: 700;")
             grid.addWidget(lbl, 0, c)
-            if c == 5:
+            if c == 6:
                 self.control_angle_header = lbl
 
         for i, m in enumerate(self.modules, start=1):
@@ -949,11 +951,16 @@ class ModularJointUI(object):
             axis_lbl = QtWidgets.QLabel(m["axis"].upper())
 
             servo_id_box = QtWidgets.QSpinBox()
-            servo_id_box.setRange(0, 8)
+            servo_id_box.setRange(0, 254)
             servo_id_box.setValue(int(m.get("servo_id", 0)))
             servo_id_box.setMaximumWidth(70)
             if m["fixed"]:
                 servo_id_box.setEnabled(False)
+
+            select_box = QtWidgets.QCheckBox()
+            select_box.setChecked(not m["fixed"])
+            if m["fixed"]:
+                select_box.setEnabled(False)
 
             down_btn = QtWidgets.QPushButton()
             down_btn.setIcon(self.icon_down)
@@ -984,7 +991,7 @@ class ModularJointUI(object):
                 down_btn.setEnabled(False)
                 up_btn.setEnabled(False)
 
-            widgets = [name_lbl, type_lbl, axis_lbl, servo_id_box, down_btn, angle_lbl, up_btn, aux_lbl]
+            widgets = [name_lbl, type_lbl, axis_lbl, servo_id_box, select_box, down_btn, angle_lbl, up_btn, aux_lbl]
             for c, w in enumerate(widgets):
                 grid.addWidget(w, i, c)
 
@@ -992,6 +999,7 @@ class ModularJointUI(object):
                 "type_lbl": type_lbl,
                 "axis_lbl": axis_lbl,
                 "servo_id_box": servo_id_box,
+                "select_box": select_box,
                 "down_btn": down_btn,
                 "angle_lbl": angle_lbl,
                 "up_btn": up_btn,
@@ -1079,6 +1087,34 @@ class ModularJointUI(object):
 
         left_layout.addWidget(self.worldGroup)
 
+        self.poseGroup = QtWidgets.QGroupBox("Saved Poses")
+        pose_layout = QtWidgets.QVBoxLayout(self.poseGroup)
+
+        self.poseList = QtWidgets.QListWidget()
+        self.poseList.setMinimumHeight(120)
+        pose_layout.addWidget(self.poseList)
+
+        pose_btn_row = QtWidgets.QHBoxLayout()
+
+        self.savePoseBtn = QtWidgets.QPushButton("Save Current")
+        self.savePoseBtn.clicked.connect(self.capture_current_pose)
+        pose_btn_row.addWidget(self.savePoseBtn)
+
+        self.loadPoseBtn = QtWidgets.QPushButton("Go To Pose")
+        self.loadPoseBtn.clicked.connect(self.go_to_selected_pose)
+        pose_btn_row.addWidget(self.loadPoseBtn)
+
+        self.updatePoseBtn = QtWidgets.QPushButton("Update Pose")
+        self.updatePoseBtn.clicked.connect(self.overwrite_selected_pose)
+        pose_btn_row.addWidget(self.updatePoseBtn)
+
+        self.deletePoseBtn = QtWidgets.QPushButton("Delete Pose")
+        self.deletePoseBtn.clicked.connect(self.delete_selected_pose)
+        pose_btn_row.addWidget(self.deletePoseBtn)
+
+        pose_layout.addLayout(pose_btn_row)
+        left_layout.addWidget(self.poseGroup)
+
         btn_row = QtWidgets.QHBoxLayout()
         self.resetBtn = QtWidgets.QPushButton("Reset")
         self.resetBtn.clicked.connect(self.reset_angles)
@@ -1099,6 +1135,14 @@ class ModularJointUI(object):
         self.readBtn = QtWidgets.QPushButton("Read Angles")
         self.readBtn.clicked.connect(self.read_current_angles)
         btn_row.addWidget(self.readBtn)
+
+        self.powerOffSelectedBtn = QtWidgets.QPushButton("Power Off Selected")
+        self.powerOffSelectedBtn.clicked.connect(self.power_off_selected_servos)
+        btn_row.addWidget(self.powerOffSelectedBtn)
+
+        self.powerOffAllBtn = QtWidgets.QPushButton("Power Off All")
+        self.powerOffAllBtn.clicked.connect(self.power_off_all_servos)
+        btn_row.addWidget(self.powerOffAllBtn)
 
         btn_row.addStretch()
         left_layout.addLayout(btn_row)
@@ -1543,6 +1587,28 @@ class ModularJointUI(object):
         self.canStatusLbl.setText("UART: servo IDs are set locally in the GUI")
         print("[INFO] Servo IDs are assigned in the GUI and used directly for UART sends.")
 
+    def get_active_servo_ids(self):
+        servo_ids = []
+        for m in self.modules:
+            if m["fixed"] or m["type"] == "none":
+                continue
+            servo_id = int(m.get("servo_id", 0))
+            if 1 <= servo_id <= 254 and servo_id not in servo_ids:
+                servo_ids.append(servo_id)
+        return servo_ids
+
+    def get_selected_servo_ids(self):
+        servo_ids = []
+        for i, m in enumerate(self.modules):
+            if m["fixed"] or m["type"] == "none":
+                continue
+            if not self.control_rows[i]["select_box"].isChecked():
+                continue
+            servo_id = int(m.get("servo_id", 0))
+            if 1 <= servo_id <= 254 and servo_id not in servo_ids:
+                servo_ids.append(servo_id)
+        return servo_ids
+
     def send(self):
         try:
             if not self.uart_ready:
@@ -1558,7 +1624,7 @@ class ModularJointUI(object):
                     continue
 
                 servo_id = int(m.get("servo_id", 0))
-                if not (1 <= servo_id <= MAX_SERVO_ID):
+                if not (1 <= servo_id <= 254):
                     print(f"[WARN] Skipping {m['name']}: invalid servo_id={servo_id}")
                     continue
 
@@ -1583,8 +1649,161 @@ class ModularJointUI(object):
             print("Send error:", e)
 
     def read_current_angles(self):
-        self.canStatusLbl.setText("UART: readback not implemented in current ServoControl.py")
-        print("[INFO] Read Angles is not implemented because current Hiwonder UART code only sends commands.")
+        try:
+            if not self.uart_ready:
+                self.canStatusLbl.setText("UART: not ready")
+                return
+
+            servo_ids = self.get_active_servo_ids()
+            if not servo_ids:
+                self.canStatusLbl.setText("UART: no valid servo IDs configured")
+                return
+
+            readback = ServoControl.getControllerServoAngles(servo_ids)
+            if not readback:
+                self.canStatusLbl.setText("UART: no angle response")
+                return
+
+            updated = 0
+            for m in self.modules:
+                if m["fixed"] or m["type"] == "none":
+                    continue
+
+                servo_id = int(m.get("servo_id", 0))
+                if servo_id not in readback:
+                    continue
+
+                servo_pos = float(readback[servo_id])
+                if m["type"] == "swivel":
+                    servo_deg = map_range(servo_pos, 0.0, 1000.0, 0.0, 360.0)
+                else:
+                    servo_deg = map_range(servo_pos, 0.0, 1000.0, 0.0, 240.0)
+
+                joint_rad = servo_deg_to_joint_rad(m, servo_deg)
+                if joint_rad is None:
+                    continue
+
+                m["q"] = joint_rad
+                updated += 1
+
+            self.refresh_all_control_rows()
+            self.sync_world_target_to_current()
+            self.plot_data()
+            self.canStatusLbl.setText(f"UART: read {updated} servo angle(s)")
+            print("[READ]", readback)
+
+        except Exception as e:
+            self.canStatusLbl.setText(f"UART: read failed ({e})")
+            print("Read Angles error:", e)
+
+    def power_off_selected_servos(self):
+        try:
+            if not self.uart_ready:
+                self.canStatusLbl.setText("UART: not ready")
+                return
+
+            servo_ids = self.get_selected_servo_ids()
+            if not servo_ids:
+                self.canStatusLbl.setText("UART: no selected servos")
+                return
+
+            ServoControl.setMultiServoUnload(servo_ids)
+            self.canStatusLbl.setText(f"UART: powered off selected {servo_ids}")
+            print("[POWER OFF SELECTED]", servo_ids)
+        except Exception as e:
+            self.canStatusLbl.setText(f"UART: power off selected failed ({e})")
+            print("Power Off Selected error:", e)
+
+    def power_off_all_servos(self):
+        try:
+            if not self.uart_ready:
+                self.canStatusLbl.setText("UART: not ready")
+                return
+
+            servo_ids = self.get_active_servo_ids()
+            if not servo_ids:
+                self.canStatusLbl.setText("UART: no valid servo IDs")
+                return
+
+            ServoControl.setMultiServoUnload(servo_ids)
+            self.canStatusLbl.setText(f"UART: powered off all {servo_ids}")
+            print("[POWER OFF ALL]", servo_ids)
+        except Exception as e:
+            self.canStatusLbl.setText(f"UART: power off all failed ({e})")
+            print("Power Off All error:", e)
+
+    def capture_current_pose(self):
+        pose = {
+            "name": f"Pose {len(self.saved_poses) + 1}",
+            "joints": []
+        }
+        for m in self.modules:
+            pose["joints"].append({
+                "name": m["name"],
+                "q": float(m["q"]),
+                "servo_id": int(m.get("servo_id", 0)),
+            })
+        self.saved_poses.append(pose)
+        self.refresh_pose_list()
+        self.canStatusLbl.setText(f"Saved {pose['name']}")
+
+    def refresh_pose_list(self):
+        if not hasattr(self, "poseList"):
+            return
+        self.poseList.blockSignals(True)
+        self.poseList.clear()
+        for pose in self.saved_poses:
+            self.poseList.addItem(pose["name"])
+        self.poseList.blockSignals(False)
+
+    def go_to_selected_pose(self):
+        row = self.poseList.currentRow()
+        if row < 0 or row >= len(self.saved_poses):
+            self.canStatusLbl.setText("Pose: no saved pose selected")
+            return
+
+        pose = self.saved_poses[row]
+        joint_map = {j["name"]: j["q"] for j in pose["joints"]}
+
+        for m in self.modules:
+            if m["name"] in joint_map and not m["fixed"] and m["type"] != "none":
+                qmin, qmax = m["qlim"]
+                m["q"] = clamp(joint_map[m["name"]], qmin, qmax)
+
+        self.refresh_all_control_rows()
+        self.sync_world_target_to_current()
+        self.plot_data()
+        self.canStatusLbl.setText(f"Loaded {pose['name']}")
+
+    def overwrite_selected_pose(self):
+        row = self.poseList.currentRow()
+        if row < 0 or row >= len(self.saved_poses):
+            self.canStatusLbl.setText("Pose: no saved pose selected")
+            return
+
+        pose = self.saved_poses[row]
+        pose["joints"] = []
+        for m in self.modules:
+            pose["joints"].append({
+                "name": m["name"],
+                "q": float(m["q"]),
+                "servo_id": int(m.get("servo_id", 0)),
+            })
+
+        self.refresh_pose_list()
+        self.poseList.setCurrentRow(row)
+        self.canStatusLbl.setText(f"Updated {pose['name']}")
+
+    def delete_selected_pose(self):
+        row = self.poseList.currentRow()
+        if row < 0 or row >= len(self.saved_poses):
+            self.canStatusLbl.setText("Pose: no saved pose selected")
+            return
+
+        name = self.saved_poses[row]["name"]
+        del self.saved_poses[row]
+        self.refresh_pose_list()
+        self.canStatusLbl.setText(f"Deleted {name}")
 
     def plot_data(self):
         try:
@@ -1633,4 +1852,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
