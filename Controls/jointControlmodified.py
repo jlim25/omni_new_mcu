@@ -12,13 +12,19 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
-import ServoControl
+#import ServoControl
 
 
 DEFAULT_MOVE_MS = 1000
+MAX_SPEED_DEG_PER_SEC = 25.0
+DEFAULT_SPEED_PERCENT = 100
+MIN_MOVE_MS = 100
+MAX_MOVE_MS = 30000
+
 WINDOW_W = 1450
 WINDOW_H = 860
 MAX_SERVO_ID = 254
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -124,84 +130,7 @@ SERVO_CAL = {
 
 
 
-def joint_to_servo_deg(module):
-    joint_name = module["name"]
-    joint_rad = module["q"]
 
-    if joint_name not in SERVO_CAL:
-        return None
-
-    c = dict(SERVO_CAL[joint_name])
-
-    if module["type"] == "swivel":
-        c["joint_min"] = -180.0
-        c["joint_max"] = 180.0
-        c["servo_min"] = 0.0
-        c["servo_max"] = 360.0
-
-    joint_deg = math.degrees(joint_rad)
-
-    if c.get("invert", False):
-        joint_deg = -joint_deg
-
-    gear_ratio = float(c.get("gear_ratio", 1.0))
-    if abs(gear_ratio) < 1e-9:
-        gear_ratio = 1.0
-
-    servo_side_joint_deg = joint_deg / gear_ratio
-    servo_side_joint_min = c["joint_min"] / gear_ratio
-    servo_side_joint_max = c["joint_max"] / gear_ratio
-
-    servo_deg = map_range(
-        servo_side_joint_deg,
-        servo_side_joint_min, servo_side_joint_max,
-        c["servo_min"], c["servo_max"]
-    )
-
-    servo_deg += float(module.get("servo_offset_deg", 0.0))
-    return clamp(servo_deg, c["servo_min"], c["servo_max"])
-
-
-def servo_deg_to_joint_rad(module, servo_deg):
-    joint_name = module["name"]
-    if joint_name not in SERVO_CAL:
-        return None
-
-    c = dict(SERVO_CAL[joint_name])
-
-    if module["type"] == "swivel":
-        c["joint_min"] = -180.0
-        c["joint_max"] = 180.0
-        c["servo_min"] = 0.0
-        c["servo_max"] = 360.0
-
-    servo_deg = float(servo_deg) - float(module.get("servo_offset_deg", 0.0))
-
-    gear_ratio = float(c.get("gear_ratio", 1.0))
-    if abs(gear_ratio) < 1e-9:
-        gear_ratio = 1.0
-
-    servo_side_joint_min = c["joint_min"] / gear_ratio
-    servo_side_joint_max = c["joint_max"] / gear_ratio
-
-    servo_side_joint_deg = map_range(
-        servo_deg,
-        c["servo_min"], c["servo_max"],
-        servo_side_joint_min, servo_side_joint_max
-    )
-
-    joint_deg = servo_side_joint_deg * gear_ratio
-
-    if c.get("invert", False):
-        joint_deg = -joint_deg
-
-    joint_rad = math.radians(joint_deg)
-
-    if not module["fixed"] and module["type"] != "none":
-        qmin, qmax = module["qlim"]
-        joint_rad = clamp(joint_rad, qmin, qmax)
-
-    return joint_rad
 
 
 
@@ -970,6 +899,9 @@ class ModularJointUI(object):
         self.world_step_pos = 0.01
         self.world_step_yaw = math.radians(3.0)
         self.world_reach_tolerance = 0.015
+        self.speed_percent = DEFAULT_SPEED_PERCENT
+        self.current_servo_deg = {}
+
 
         self.control_rows = []
         self.structure_rows = []
@@ -1017,6 +949,16 @@ class ModularJointUI(object):
         self.stepSpin.setSingleStep(0.01)
         self.stepSpin.valueChanged.connect(self.change_step_size)
 
+        speed_lbl = QtWidgets.QLabel("Speed")
+        self.speedSpin = QtWidgets.QSpinBox()
+        self.speedSpin.setRange(10, 100)
+        self.speedSpin.setSingleStep(10)
+        self.speedSpin.setValue(self.speed_percent)
+        self.speedSpin.valueChanged.connect(self.change_speed_percent)
+
+        self.speedPctLbl = QtWidgets.QLabel("%")
+        self.speedDegLbl = QtWidgets.QLabel()
+
         preview_lbl = QtWidgets.QLabel("Preview")
         self.previewModeBox = QtWidgets.QComboBox()
         self.previewModeBox.addItems(["Skeleton", "3D Model"])
@@ -1042,11 +984,16 @@ class ModularJointUI(object):
         self.canStatusLbl = QtWidgets.QLabel("UART: not initialized")
 
         for w in [
-            count_lbl, self.countSpin, unit_lbl, self.unitBox, step_lbl, self.stepSpin, self.stepUnitLbl,
-            preview_lbl, self.previewModeBox, mode_lbl, self.controlModeBox,
+            count_lbl, self.countSpin,
+            unit_lbl, self.unitBox,
+            step_lbl, self.stepSpin, self.stepUnitLbl,
+            speed_lbl, self.speedSpin, self.speedPctLbl, self.speedDegLbl,
+            preview_lbl, self.previewModeBox,
+            mode_lbl, self.controlModeBox,
             self.plotAxesCheck, self.frameAxesCheck, self.canStatusLbl
         ]:
             top_layout.addWidget(w)
+
 
         top_layout.addStretch()
         top_layout.addWidget(self.posLbl)
@@ -1065,9 +1012,12 @@ class ModularJointUI(object):
 
         self.rebuild_tabs()
         self.refresh_step_spin()
+        self.refresh_speed_label()
+        self.sync_servo_cache_to_model()
         self.sync_world_target_to_current()
         self.init_uart()
         self.plot_data()
+
 
     def init_uart(self):
         try:
@@ -1104,6 +1054,56 @@ class ModularJointUI(object):
             self.stepSpin.setValue(self.step_rad)
         self.stepSpin.blockSignals(False)
         self.stepUnitLbl.setText(self.angle_unit_short())
+
+    def change_speed_percent(self, value):
+        self.speed_percent = int(value)
+        self.refresh_speed_label()
+
+    def refresh_speed_label(self):
+        if hasattr(self, "speedDegLbl"):
+            self.speedDegLbl.setText(f"{self.get_speed_deg_per_sec():.1f} deg/s")
+
+    def get_speed_deg_per_sec(self):
+        return MAX_SPEED_DEG_PER_SEC * float(self.speed_percent) / 100.0
+
+    def sync_servo_cache_to_model(self):
+        self.current_servo_deg = {}
+        for m in self.modules:
+            if m["fixed"] or m["type"] == "none":
+                continue
+            servo_id = int(m.get("servo_id", 0))
+            if not (1 <= servo_id <= MAX_SERVO_ID):
+                continue
+            servo_deg = joint_to_servo_deg(m)
+            if servo_deg is not None:
+                self.current_servo_deg[servo_id] = float(servo_deg)
+
+    def estimate_move_time_ms(self):
+        speed_deg_per_sec = max(0.1, self.get_speed_deg_per_sec())
+        max_delta_deg = 0.0
+
+        for m in self.modules:
+            if m["fixed"] or m["type"] == "none":
+                continue
+
+            servo_id = int(m.get("servo_id", 0))
+            if not (1 <= servo_id <= MAX_SERVO_ID):
+                continue
+
+            target_deg = joint_to_servo_deg(m)
+            if target_deg is None:
+                continue
+
+            current_deg = self.current_servo_deg.get(servo_id, target_deg)
+            delta_deg = abs(float(target_deg) - float(current_deg))
+            max_delta_deg = max(max_delta_deg, delta_deg)
+
+        if max_delta_deg < 0.1:
+            return MIN_MOVE_MS
+
+        move_ms = int(round((max_delta_deg / speed_deg_per_sec) * 1000.0))
+        return int(clamp(move_ms, MIN_MOVE_MS, MAX_MOVE_MS))
+
 
     def toggle_plot_axes(self, checked):
         self.show_plot_axes = checked
@@ -1161,9 +1161,11 @@ class ModularJointUI(object):
 
         self.modules = new_modules
         self.rebuild_tabs()
+        self.sync_servo_cache_to_model()
         self.sync_world_target_to_current()
         self.view_needs_refit = True
         self.plot_data()
+
 
     def change_step_size(self, shown_value):
         self.step_rad = self.angle_from_display(shown_value)
@@ -1982,16 +1984,20 @@ class ModularJointUI(object):
                 qmin, qmax = m["qlim"]
                 m["q"] = max(qmin, min(qmax, m["home_q"]))
         self.refresh_all_control_rows()
+        self.sync_servo_cache_to_model()
         self.sync_world_target_to_current()
         self.plot_data()
+
 
     def reset_angles(self):
         for m in self.modules:
             if not m["fixed"] and m["type"] != "none":
                 m["q"] = 0.0
         self.refresh_all_control_rows()
+        self.sync_servo_cache_to_model()
         self.sync_world_target_to_current()
         self.plot_data()
+
 
     def get_active_servo_ids(self):
         servo_ids = []
@@ -2022,8 +2028,10 @@ class ModularJointUI(object):
                 self.canStatusLbl.setText("UART: not ready")
                 return
 
+            move_ms = self.estimate_move_time_ms()
             servo_packets = []
             sent = 0
+            sent_targets = []
 
             for m in self.modules:
                 if m["fixed"] or m["type"] == "none":
@@ -2041,18 +2049,28 @@ class ModularJointUI(object):
 
                 pos = servo_deg_to_uart_count(m, servo_deg)
                 servo_packets.extend([servo_id, pos])
+                sent_targets.append((servo_id, servo_deg, m["name"], pos))
                 sent += 1
-                print(f"[SEND] {m['name']} id={servo_id} angle={servo_deg:.1f} deg pos={pos} time={DEFAULT_MOVE_MS} ms")
+                print(f"[SEND] {m['name']} id={servo_id} angle={servo_deg:.1f} deg pos={pos} time={move_ms} ms")
 
             if sent == 1:
-                ServoControl.setBusServoMove(servo_packets[0], servo_packets[1], DEFAULT_MOVE_MS)
+                ServoControl.setBusServoMove(servo_packets[0], servo_packets[1], move_ms)
             elif sent > 1:
-                ServoControl.setMoreBusServoMove(servo_packets, sent, DEFAULT_MOVE_MS)
+                ServoControl.setMoreBusServoMove(servo_packets, sent, move_ms)
+            else:
+                self.canStatusLbl.setText("UART: no valid servo commands")
+                return
 
-            self.canStatusLbl.setText(f"UART: sent {sent} servo command(s)")
+            for servo_id, servo_deg, _, _ in sent_targets:
+                self.current_servo_deg[servo_id] = float(servo_deg)
+
+            self.canStatusLbl.setText(
+                f"UART: sent {sent} servo command(s) at {self.speed_percent}% ({self.get_speed_deg_per_sec():.1f} deg/s), {move_ms} ms"
+            )
         except Exception as e:
             self.canStatusLbl.setText(f"UART: send failed ({e})")
             print("Send error:", e)
+
 
     def read_current_angles(self):
         try:
@@ -2085,7 +2103,10 @@ class ModularJointUI(object):
                 else:
                     servo_deg = map_range(servo_pos, 0.0, 1000.0, 0.0, 240.0)
 
+                self.current_servo_deg[servo_id] = float(servo_deg)
+
                 joint_rad = servo_deg_to_joint_rad(m, servo_deg)
+
                 if joint_rad is None:
                     continue
 
@@ -2174,8 +2195,10 @@ class ModularJointUI(object):
                 m["q"] = clamp(joint_map[m["name"]], qmin, qmax)
 
         self.refresh_all_control_rows()
+        self.sync_servo_cache_to_model()
         self.sync_world_target_to_current()
         self.plot_data()
+
         self.canStatusLbl.setText(f"Loaded {pose['name']}")
 
     def overwrite_selected_pose(self):
