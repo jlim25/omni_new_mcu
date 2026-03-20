@@ -62,7 +62,7 @@ SERVO_CAL = {
         "servo_min": 0.0,
         "servo_max": 240.0,
         "invert": False,
-        "gear_ratio": 1.0,
+        "gear_ratio": -1.0,
     },
     "J3": {
         "joint_min": -120.0,
@@ -78,7 +78,7 @@ SERVO_CAL = {
         "servo_min": 0.0,
         "servo_max": 240.0,
         "invert": False,
-        "gear_ratio": 1.0,
+        "gear_ratio": -1.0,
     },
     "J5": {
         "joint_min": -120.0,
@@ -86,7 +86,7 @@ SERVO_CAL = {
         "servo_min": 0.0,
         "servo_max": 240.0,
         "invert": False,
-        "gear_ratio": 1.0,
+        "gear_ratio": -1.0,
     },
     "J6": {
         "joint_min": -120.0,
