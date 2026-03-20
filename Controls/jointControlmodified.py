@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
-import ServoControl
+# import ServoControl
 
 
 DEFAULT_MOVE_MS = 1000
@@ -158,6 +158,7 @@ def joint_to_servo_deg(module):
         c["servo_min"], c["servo_max"]
     )
 
+    servo_deg += float(module.get("servo_offset_deg", 0.0))
     return clamp(servo_deg, c["servo_min"], c["servo_max"])
 
 
@@ -174,6 +175,8 @@ def servo_deg_to_joint_rad(module, servo_deg):
         c["servo_min"] = 0.0
         c["servo_max"] = 360.0
 
+    servo_deg = float(servo_deg) - float(module.get("servo_offset_deg", 0.0))
+
     gear_ratio = float(c.get("gear_ratio", 1.0))
     if abs(gear_ratio) < 1e-9:
         gear_ratio = 1.0
@@ -182,7 +185,7 @@ def servo_deg_to_joint_rad(module, servo_deg):
     servo_side_joint_max = c["joint_max"] / gear_ratio
 
     servo_side_joint_deg = map_range(
-        float(servo_deg),
+        servo_deg,
         c["servo_min"], c["servo_max"],
         servo_side_joint_min, servo_side_joint_max
     )
@@ -199,6 +202,7 @@ def servo_deg_to_joint_rad(module, servo_deg):
         joint_rad = clamp(joint_rad, qmin, qmax)
 
     return joint_rad
+
 
 
 
@@ -376,12 +380,21 @@ def joint_to_servo_deg(module):
         c["servo_max"] = 360.0
 
     joint_deg = math.degrees(joint_rad)
+
     if c.get("invert", False):
         joint_deg = -joint_deg
 
+    gear_ratio = float(c.get("gear_ratio", 1.0))
+    if abs(gear_ratio) < 1e-9:
+        gear_ratio = 1.0
+
+    servo_side_joint_deg = joint_deg / gear_ratio
+    servo_side_joint_min = c["joint_min"] / gear_ratio
+    servo_side_joint_max = c["joint_max"] / gear_ratio
+
     servo_deg = map_range(
-        joint_deg,
-        c["joint_min"], c["joint_max"],
+        servo_side_joint_deg,
+        servo_side_joint_min, servo_side_joint_max,
         c["servo_min"], c["servo_max"]
     )
 
@@ -404,11 +417,20 @@ def servo_deg_to_joint_rad(module, servo_deg):
 
     servo_deg = float(servo_deg) - float(module.get("servo_offset_deg", 0.0))
 
-    joint_deg = map_range(
+    gear_ratio = float(c.get("gear_ratio", 1.0))
+    if abs(gear_ratio) < 1e-9:
+        gear_ratio = 1.0
+
+    servo_side_joint_min = c["joint_min"] / gear_ratio
+    servo_side_joint_max = c["joint_max"] / gear_ratio
+
+    servo_side_joint_deg = map_range(
         servo_deg,
         c["servo_min"], c["servo_max"],
-        c["joint_min"], c["joint_max"]
+        servo_side_joint_min, servo_side_joint_max
     )
+
+    joint_deg = servo_side_joint_deg * gear_ratio
 
     if c.get("invert", False):
         joint_deg = -joint_deg
@@ -1518,14 +1540,15 @@ class ModularJointUI(object):
 
     def build_config_tab(self):
         tab = QtWidgets.QWidget()
-        outer = QtWidgets.QVBoxLayout(tab)
+        layout = QtWidgets.QHBoxLayout(tab)
+        layout.setSpacing(10)
 
-        card = self.make_card()
-        card_layout = QtWidgets.QVBoxLayout(card)
+        left_card = self.make_card()
+        left_layout = QtWidgets.QVBoxLayout(left_card)
 
         self.help_lbl = QtWidgets.QLabel("")
         self.help_lbl.setWordWrap(True)
-        card_layout.addWidget(self.help_lbl)
+        left_layout.addWidget(self.help_lbl)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1535,7 +1558,13 @@ class ModularJointUI(object):
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
 
-        headers = ["Joint", "Type", "Axis", "Offset X", "Offset Y", "Offset Z", "Link X", "Link Y", "Link Z", None, None, None, "Invert"]
+        headers = [
+            "Joint", "Type", "Axis",
+            "Offset X", "Offset Y", "Offset Z",
+            "Link X", "Link Y", "Link Z",
+            None, None, None,
+            "Servo Offset (deg)", "Invert"
+        ]
         for c, text in enumerate(headers):
             lbl = QtWidgets.QLabel("" if text is None else text)
             lbl.setStyleSheet("color: #93c5fd; font-weight: 700;")
@@ -1567,11 +1596,18 @@ class ModularJointUI(object):
             qmin_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][0]))
             qmax_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][1]))
             home_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["home_q"]))
+            servo_offset_edit = QtWidgets.QLineEdit(str(float(m.get("servo_offset_deg", 0.0))))
 
             invert_box = QtWidgets.QCheckBox()
             invert_box.setChecked(bool(SERVO_CAL.get(m["name"], {}).get("invert", False)))
 
-            widgets = [name_lbl, type_box, axis_box, ox, oy, oz, lx, ly, lz, qmin_edit, qmax_edit, home_edit, invert_box]
+            widgets = [
+                name_lbl, type_box, axis_box,
+                ox, oy, oz,
+                lx, ly, lz,
+                qmin_edit, qmax_edit, home_edit,
+                servo_offset_edit, invert_box
+            ]
             for c, w in enumerate(widgets):
                 if hasattr(w, "setMinimumWidth"):
                     w.setMinimumWidth(64)
@@ -1583,6 +1619,7 @@ class ModularJointUI(object):
                 qmin_edit.setEnabled(False)
                 qmax_edit.setEnabled(False)
                 home_edit.setEnabled(False)
+                servo_offset_edit.setEnabled(False)
                 invert_box.setEnabled(False)
 
             self.config_rows.append({
@@ -1593,21 +1630,45 @@ class ModularJointUI(object):
                 "qmin_edit": qmin_edit,
                 "qmax_edit": qmax_edit,
                 "home_edit": home_edit,
+                "servo_offset_edit": servo_offset_edit,
                 "invert_box": invert_box,
             })
 
         scroll.setWidget(content)
-        card_layout.addWidget(scroll)
+        left_layout.addWidget(scroll)
 
         btn_row = QtWidgets.QHBoxLayout()
         self.applyBtn = QtWidgets.QPushButton("Apply Geometry")
         self.applyBtn.clicked.connect(self.apply_geometry)
         btn_row.addWidget(self.applyBtn)
         btn_row.addStretch()
-        card_layout.addLayout(btn_row)
+        left_layout.addLayout(btn_row)
 
-        outer.addWidget(card)
+        right_card = self.make_card()
+        right_layout = QtWidgets.QVBoxLayout(right_card)
+
+        preview_title = QtWidgets.QLabel("3D Preview")
+        preview_font = QtGui.QFont("Segoe UI", 11)
+        preview_font.setBold(True)
+        preview_title.setFont(preview_font)
+        right_layout.addWidget(preview_title)
+
+        preview_info = QtWidgets.QLabel("Preview current robot geometry and calibration while editing Configure Robot values.")
+        preview_info.setWordWrap(True)
+        preview_info.setStyleSheet("color: #cbd5e1;")
+        right_layout.addWidget(preview_info)
+
+        right_layout.addWidget(self.window.cfg_toolbar)
+        self.window.cfg_canvas.setMinimumHeight(480)
+        self.window.cfg_canvas.setStyleSheet("background: #0b1220; border: 1px solid #334155; border-radius: 8px;")
+        right_layout.addWidget(self.window.cfg_canvas, 1)
+
+        layout.addWidget(left_card, 3)
+        layout.addWidget(right_card, 2)
+
         self.tabs.addTab(tab, "Configure Robot")
+
+
 
 
     def change_servo_id(self, idx, value):
@@ -1717,6 +1778,10 @@ class ModularJointUI(object):
             row["lx"].setText(str(m["link"][0]))
             row["ly"].setText(str(m["link"][1]))
             row["lz"].setText(str(m["link"][2]))
+
+            if "servo_offset_edit" in row:
+                row["servo_offset_edit"].setText(str(float(m.get("servo_offset_deg", 0.0))))
+                row["servo_offset_edit"].setEnabled(not m["fixed"])
 
             if "invert_box" in row:
                 row["invert_box"].blockSignals(True)
@@ -1882,6 +1947,9 @@ class ModularJointUI(object):
                     float(row["lz"].text())
                 ], dtype=float)
 
+                if "servo_offset_edit" in row:
+                    m["servo_offset_deg"] = float(row["servo_offset_edit"].text())
+
                 if m["type"] == "none":
                     m["q"] = 0.0
                     m["home_q"] = 0.0
@@ -1903,10 +1971,10 @@ class ModularJointUI(object):
             self.refresh_structure_fields()
             self.refresh_config_fields()
             self.sync_world_target_to_current()
+            self.view_needs_refit = True
             self.plot_data()
         except Exception as e:
             print("Apply geometry error:", e)
-
 
     def go_home(self):
         for m in self.modules:
