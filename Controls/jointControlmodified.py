@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
-import ServoControl
+#import ServoControl
 
 
 DEFAULT_MOVE_MS = 1000
@@ -170,7 +170,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi, math.pi),
                 "fixed": False,
                 "servo_id": 1,
-                "servo_offset_deg": -56.8,
+                "servo_offset_deg": 60.48,
             },
             {
                 "name": "J2",
@@ -196,7 +196,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi / 2, math.pi / 2),
                 "fixed": False,
                 "servo_id": 4,
-                "servo_offset_deg": 5.52,
+                "servo_offset_deg": 12.96,
             },
             {
                 "name": "J4",
@@ -222,7 +222,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi, math.pi),
                 "fixed": False,
                 "servo_id": 5,
-                "servo_offset_deg": -160,
+                "servo_offset_deg": -11.88,
             },
             {
                 "name": "GRIP",
@@ -288,71 +288,87 @@ def make_default_modules(joint_count):
 
 def make_alt_modules():
     return [
-        {
-            "name": "J1",
-            "type": "swivel",
-            "axis": "z",
-            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
-            "link": np.array([0.0, 0.0, 0.2032], dtype=float),
-            "q": 0.0,
-            "home_q": 0.0,
-            "qlim": (-math.pi, math.pi),
-            "fixed": False,
-            "servo_id": 1,
-            "servo_offset_deg": 0.0,
-        },
-        {
-            "name": "J2",
-            "type": "rotation",
-            "axis": "y",
-            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
-            "link": np.array([0.0, 0.0, 0.2032], dtype=float),
-            "q": 0.0,
-            "home_q": 0.0,
-            "qlim": (-math.pi / 2, math.pi / 2),
-            "fixed": False,
-            "servo_id": 2,
-            "servo_offset_deg": 0.0,
-        },
-        {
-            "name": "J3",
-            "type": "rotation",
-            "axis": "y",
-            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
-            "link": np.array([0.0, 0.0, 0.1524], dtype=float),
-            "q": 0.0,
-            "home_q": 0.0,
-            "qlim": (-math.pi / 2, math.pi / 2),
-            "fixed": False,
-            "servo_id": 4,
-            "servo_offset_deg": 0.0,
-        },
-        {
-            "name": "J4",
-            "type": "swivel",
-            "axis": "z",
-            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
-            "link": np.array([0.0, 0.0, 0.0], dtype=float),
-            "q": 0.0,
-            "home_q": 0.0,
-            "qlim": (-math.pi, math.pi),
-            "fixed": False,
-            "servo_id": 6,
-            "servo_offset_deg": 0.0,
-        },
-        {
-            "name": "GRIP",
-            "type": "swivel",
-            "axis": "z",
-            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
-            "link": np.array([0.0, 0.0, 0.0], dtype=float),
-            "q": 0.0,
-            "home_q": 0.0,
-            "qlim": (-math.pi, math.pi),
-            "fixed": True,
-            "servo_id": 0,
-            "servo_offset_deg": 0.0,
-        }
+                    {
+                "name": "J1",
+                "type": "swivel",
+                "axis": "z",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.2032], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi, math.pi),
+                "fixed": False,
+                "servo_id": 1,
+                "servo_offset_deg": 60.48,
+            },
+            {
+                "name": "J2",
+                "type": "rotation",
+                "axis": "y",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.1524], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi / 2, math.pi / 2),
+                "fixed": False,
+                "servo_id": 2,
+                "servo_offset_deg": -12.72,
+            },
+            {
+                "name": "J3",
+                "type": "rotation",
+                "axis": "y",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.1016], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi / 2, math.pi / 2),
+                "fixed": False,
+                "servo_id": 4,
+                "servo_offset_deg": 12.96,
+            },
+
+            {
+                "name": "J4",
+                "type": "swivel",
+                "axis": "y",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.0], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi, math.pi),
+                "fixed": False,
+                "servo_id": 5,
+                "servo_offset_deg": -11.88,
+            },
+
+            {
+                "name": "J5",
+                "type": "rotation",
+                "axis": "y",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.1016], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi / 2, math.pi / 2),
+                "fixed": False,
+                "servo_id": 6,
+                "servo_offset_deg": 30.7,
+            },
+
+            {
+                "name": "GRIP",
+                "type": "swivel",
+                "axis": "z",
+                "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+                "link": np.array([0.0, 0.0, 0.0], dtype=float),
+                "q": 0.0,
+                "home_q": 0.0,
+                "qlim": (-math.pi, math.pi),
+                "fixed": True,
+                "servo_id": 0,
+                "servo_offset_deg": 0.0,
+            }
     ]
 
 
@@ -1080,12 +1096,14 @@ class ModularJointUI(object):
             count_lbl, self.countSpin,
             unit_lbl, self.unitBox,
             step_lbl, self.stepSpin, self.stepUnitLbl,
+            speed_lbl, self.speedSpin, self.speedPctLbl, self.speedDegLbl,
             preview_lbl, self.previewModeBox,
             mode_lbl, self.controlModeBox,
             config_lbl, self.configProfileBox, self.loadConfigBtn, self.saveConfigBtn, self.overwriteConfigBtn,
             self.plotAxesCheck, self.frameAxesCheck, self.canStatusLbl
         ]:
             top_layout.addWidget(w)
+
 
 
 
@@ -1107,11 +1125,13 @@ class ModularJointUI(object):
 
         self.rebuild_tabs()
         self.refresh_step_spin()
+        self.refresh_speed_label()
         self.load_configs_from_file()
         self.load_poses_from_file()
         self.sync_world_target_to_current()
         self.init_uart()
         self.plot_data()
+
 
 
 
@@ -1292,8 +1312,10 @@ class ModularJointUI(object):
         self.countSpin.blockSignals(False)
 
         self.rebuild_tabs()
-        if hasattr(self, "sync_servo_cache_to_model"):
-            self.sync_servo_cache_to_model()
+        self.refresh_all_control_rows()
+        self.refresh_structure_fields()
+        self.refresh_config_fields()
+        self.sync_servo_cache_to_model()
         self.sync_world_target_to_current()
         self.view_needs_refit = True
         self.plot_data()
@@ -2273,6 +2295,12 @@ class ModularJointUI(object):
             self.sync_world_target_to_current()
             self.view_needs_refit = True
             self.plot_data()
+
+            selected_name = self.configProfileBox.currentText().strip() if hasattr(self, "configProfileBox") else ""
+            if selected_name and selected_name in self.saved_configs:
+                self.saved_configs[selected_name] = self.export_current_configuration()
+                self.save_configs_to_file()
+
         except Exception as e:
             print("Apply geometry error:", e)
 

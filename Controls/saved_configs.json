@@ -161,7 +161,7 @@
     ]
   },
   "Alt Config": {
-    "joint_count": 4,
+    "joint_count": 5,
     "modules": [
       {
         "name": "J1",
@@ -185,7 +185,7 @@
         ],
         "fixed": false,
         "servo_id": 1,
-        "servo_offset_deg": 0.0,
+        "servo_offset_deg": 60.48,
         "invert": false,
         "gear_ratio": 2.0
       },
@@ -211,7 +211,7 @@
         ],
         "fixed": false,
         "servo_id": 2,
-        "servo_offset_deg": 0.0,
+        "servo_offset_deg": -12.72,
         "invert": true,
         "gear_ratio": 1.0
       },
@@ -237,7 +237,7 @@
         ],
         "fixed": false,
         "servo_id": 4,
-        "servo_offset_deg": 0.0,
+        "servo_offset_deg": 12.96,
         "invert": false,
         "gear_ratio": 1.0
       },
@@ -262,8 +262,34 @@
           3.141592653589793
         ],
         "fixed": false,
+        "servo_id": 5,
+        "servo_offset_deg": 30.7,
+        "invert": true,
+        "gear_ratio": 1.0
+      },
+      {
+        "name": "J5",
+        "type": "swivel",
+        "axis": "y",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "fixed": false,
         "servo_id": 6,
-        "servo_offset_deg": 0.0,
+        "servo_offset_deg": -11.88,
         "invert": true,
         "gear_ratio": 1.0
       },
