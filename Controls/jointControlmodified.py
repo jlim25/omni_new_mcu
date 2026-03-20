@@ -61,8 +61,8 @@ SERVO_CAL = {
         "joint_max": 120.0,
         "servo_min": 0.0,
         "servo_max": 240.0,
-        "invert": False,
-        "gear_ratio": -1.0,
+        "invert": True,
+        "gear_ratio": 1.0,
     },
     "J3": {
         "joint_min": -120.0,
@@ -77,16 +77,16 @@ SERVO_CAL = {
         "joint_max": 120.0,
         "servo_min": 0.0,
         "servo_max": 240.0,
-        "invert": False,
-        "gear_ratio": -1.0,
+        "invert": True,
+        "gear_ratio": 1.0,
     },
     "J5": {
         "joint_min": -120.0,
         "joint_max": 120.0,
         "servo_min": 0.0,
         "servo_max": 240.0,
-        "invert": False,
-        "gear_ratio": -1.0,
+        "invert": True,
+        "gear_ratio": 1.0,
     },
     "J6": {
         "joint_min": -120.0,
@@ -121,6 +121,7 @@ SERVO_CAL = {
         "gear_ratio": 1.0,
     },
 }
+
 
 
 def joint_to_servo_deg(module):
@@ -162,7 +163,6 @@ def joint_to_servo_deg(module):
 
 def servo_deg_to_joint_rad(module, servo_deg):
     joint_name = module["name"]
-
     if joint_name not in SERVO_CAL:
         return None
 
@@ -1156,15 +1156,15 @@ class ModularJointUI(object):
 
     def refresh_headers(self):
         self.control_angle_header.setText(f"Angle ({self.angle_unit_short()})")
-        self.config_offset_header.setText("Servo Offset (deg)")
         self.config_min_header.setText(f"Min ({self.angle_unit_short()})")
         self.config_max_header.setText(f"Max ({self.angle_unit_short()})")
         self.config_home_header.setText(f"Home ({self.angle_unit_short()})")
         self.help_lbl.setText(
             "Rotation joints use 240-degree servo mapping and swivel joints use 360-degree mapping. "
-            "Read Angles queries the Hiwonder controller using the configured Servo ID values. "
-            "Servo Offset (deg) shifts the commanded servo center and is reversed during readback."
+            "Servo direction can be inverted per joint in Configure Robot, and joint angles can be typed directly in Joint Control. "
+            "Read Angles queries the Hiwonder controller using the configured Servo ID values."
         )
+
 
     def make_card(self):
         w = QtWidgets.QFrame()
@@ -1220,12 +1220,12 @@ class ModularJointUI(object):
             down_btn.setIconSize(QtCore.QSize(20, 20))
             down_btn.setFixedSize(38, 38)
 
-            angle_lbl = QtWidgets.QLabel()
-            angle_lbl.setFrameShape(QtWidgets.QFrame.Box)
-            angle_lbl.setAlignment(QtCore.Qt.AlignCenter)
-            angle_lbl.setMinimumWidth(85)
-            angle_lbl.setMinimumHeight(34)
-            angle_lbl.setStyleSheet("border: 1px solid #334155; border-radius: 8px; background: #0b1220;")
+            angle_edit = QtWidgets.QDoubleSpinBox()
+            angle_edit.setDecimals(2 if self.unit_mode == "Degrees" else 3)
+            angle_edit.setRange(-100000.0, 100000.0)
+            angle_edit.setSingleStep(1.0 if self.unit_mode == "Degrees" else 0.01)
+            angle_edit.setMinimumWidth(95)
+            angle_edit.setMinimumHeight(34)
 
             aux_lbl = QtWidgets.QLabel()
             aux_lbl.setAlignment(QtCore.Qt.AlignCenter)
@@ -1240,11 +1240,13 @@ class ModularJointUI(object):
                 down_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, -self.step_rad))
                 up_btn.clicked.connect(lambda _, idx=i-1: self.change_angle(idx, self.step_rad))
                 servo_id_box.valueChanged.connect(lambda val, idx=i-1: self.change_servo_id(idx, val))
+                angle_edit.valueChanged.connect(lambda val, idx=i-1: self.set_joint_angle_from_display(idx, val))
             else:
                 down_btn.setEnabled(False)
                 up_btn.setEnabled(False)
+                angle_edit.setEnabled(False)
 
-            widgets = [name_lbl, type_lbl, axis_lbl, servo_id_box, select_box, down_btn, angle_lbl, up_btn, aux_lbl]
+            widgets = [name_lbl, type_lbl, axis_lbl, servo_id_box, select_box, down_btn, angle_edit, up_btn, aux_lbl]
             for c, w in enumerate(widgets):
                 grid.addWidget(w, i, c)
 
@@ -1254,7 +1256,7 @@ class ModularJointUI(object):
                 "servo_id_box": servo_id_box,
                 "select_box": select_box,
                 "down_btn": down_btn,
-                "angle_lbl": angle_lbl,
+                "angle_edit": angle_edit,
                 "up_btn": up_btn,
                 "aux_lbl": aux_lbl,
             })
@@ -1418,6 +1420,7 @@ class ModularJointUI(object):
 
         self.tabs.addTab(tab, "Control")
 
+
     def build_structure_tab(self):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(tab)
@@ -1515,15 +1518,14 @@ class ModularJointUI(object):
 
     def build_config_tab(self):
         tab = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(tab)
-        layout.setSpacing(10)
+        outer = QtWidgets.QVBoxLayout(tab)
 
-        left_card = self.make_card()
-        left_layout = QtWidgets.QVBoxLayout(left_card)
+        card = self.make_card()
+        card_layout = QtWidgets.QVBoxLayout(card)
 
         self.help_lbl = QtWidgets.QLabel("")
         self.help_lbl.setWordWrap(True)
-        left_layout.addWidget(self.help_lbl)
+        card_layout.addWidget(self.help_lbl)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1533,23 +1535,16 @@ class ModularJointUI(object):
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
 
-        headers = [
-            "Joint", "Type", "Axis",
-            "Offset X", "Offset Y", "Offset Z",
-            "Link X", "Link Y", "Link Z",
-            "Servo Offset", None, None, None
-        ]
+        headers = ["Joint", "Type", "Axis", "Offset X", "Offset Y", "Offset Z", "Link X", "Link Y", "Link Z", None, None, None, "Invert"]
         for c, text in enumerate(headers):
             lbl = QtWidgets.QLabel("" if text is None else text)
             lbl.setStyleSheet("color: #93c5fd; font-weight: 700;")
             grid.addWidget(lbl, 0, c)
             if c == 9:
-                self.config_offset_header = lbl
-            elif c == 10:
                 self.config_min_header = lbl
-            elif c == 11:
+            elif c == 10:
                 self.config_max_header = lbl
-            elif c == 12:
+            elif c == 11:
                 self.config_home_header = lbl
 
         for i, m in enumerate(self.modules, start=1):
@@ -1569,12 +1564,14 @@ class ModularJointUI(object):
             lx = QtWidgets.QLineEdit(str(m["link"][0]))
             ly = QtWidgets.QLineEdit(str(m["link"][1]))
             lz = QtWidgets.QLineEdit(str(m["link"][2]))
-            servo_offset_edit = QtWidgets.QLineEdit("" if m["fixed"] else str(m.get("servo_offset_deg", 0.0)))
             qmin_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][0]))
             qmax_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["qlim"][1]))
             home_edit = QtWidgets.QLineEdit("" if m["fixed"] else self.format_angle(m["home_q"]))
 
-            widgets = [name_lbl, type_box, axis_box, ox, oy, oz, lx, ly, lz, servo_offset_edit, qmin_edit, qmax_edit, home_edit]
+            invert_box = QtWidgets.QCheckBox()
+            invert_box.setChecked(bool(SERVO_CAL.get(m["name"], {}).get("invert", False)))
+
+            widgets = [name_lbl, type_box, axis_box, ox, oy, oz, lx, ly, lz, qmin_edit, qmax_edit, home_edit, invert_box]
             for c, w in enumerate(widgets):
                 if hasattr(w, "setMinimumWidth"):
                     w.setMinimumWidth(64)
@@ -1583,55 +1580,35 @@ class ModularJointUI(object):
             if m["fixed"]:
                 type_box.setEnabled(False)
                 axis_box.setEnabled(False)
-                servo_offset_edit.setEnabled(False)
                 qmin_edit.setEnabled(False)
                 qmax_edit.setEnabled(False)
                 home_edit.setEnabled(False)
+                invert_box.setEnabled(False)
 
             self.config_rows.append({
                 "type_box": type_box,
                 "axis_box": axis_box,
                 "ox": ox, "oy": oy, "oz": oz,
                 "lx": lx, "ly": ly, "lz": lz,
-                "servo_offset_edit": servo_offset_edit,
                 "qmin_edit": qmin_edit,
                 "qmax_edit": qmax_edit,
                 "home_edit": home_edit,
+                "invert_box": invert_box,
             })
 
         scroll.setWidget(content)
-        left_layout.addWidget(scroll)
+        card_layout.addWidget(scroll)
 
         btn_row = QtWidgets.QHBoxLayout()
         self.applyBtn = QtWidgets.QPushButton("Apply Geometry")
         self.applyBtn.clicked.connect(self.apply_geometry)
         btn_row.addWidget(self.applyBtn)
         btn_row.addStretch()
-        left_layout.addLayout(btn_row)
+        card_layout.addLayout(btn_row)
 
-        right_card = self.make_card()
-        right_layout = QtWidgets.QVBoxLayout(right_card)
-
-        preview_title = QtWidgets.QLabel("3D Preview")
-        preview_font = QtGui.QFont("Segoe UI", 11)
-        preview_font.setBold(True)
-        preview_title.setFont(preview_font)
-        right_layout.addWidget(preview_title)
-
-        preview_info = QtWidgets.QLabel("Preview current geometry while editing robot configuration.")
-        preview_info.setWordWrap(True)
-        preview_info.setStyleSheet("color: #cbd5e1;")
-        right_layout.addWidget(preview_info)
-
-        right_layout.addWidget(self.window.cfg_toolbar)
-        self.window.cfg_canvas.setMinimumHeight(480)
-        self.window.cfg_canvas.setStyleSheet("background: #0b1220; border: 1px solid #334155; border-radius: 8px;")
-        right_layout.addWidget(self.window.cfg_canvas, 1)
-
-        layout.addWidget(left_card, 3)
-        layout.addWidget(right_card, 2)
-
+        outer.addWidget(card)
         self.tabs.addTab(tab, "Configure Robot")
+
 
     def change_servo_id(self, idx, value):
         self.modules[idx]["servo_id"] = int(value)
@@ -1676,9 +1653,11 @@ class ModularJointUI(object):
             if m["fixed"] or m["type"] == "none":
                 row["down_btn"].setEnabled(False)
                 row["up_btn"].setEnabled(False)
+                row["angle_edit"].setEnabled(False)
             else:
                 row["down_btn"].setEnabled(joint_enabled)
                 row["up_btn"].setEnabled(joint_enabled)
+                row["angle_edit"].setEnabled(joint_enabled)
 
         if hasattr(self, "worldGroup"):
             self.worldGroup.setVisible(True)
@@ -1738,7 +1717,13 @@ class ModularJointUI(object):
             row["lx"].setText(str(m["link"][0]))
             row["ly"].setText(str(m["link"][1]))
             row["lz"].setText(str(m["link"][2]))
-            row["servo_offset_edit"].setText(str(m.get("servo_offset_deg", 0.0)))
+
+            if "invert_box" in row:
+                row["invert_box"].blockSignals(True)
+                row["invert_box"].setChecked(bool(SERVO_CAL.get(m["name"], {}).get("invert", False)))
+                row["invert_box"].setEnabled(not m["fixed"])
+                row["invert_box"].blockSignals(False)
+
             if not m["fixed"]:
                 row["qmin_edit"].setText(self.format_angle(m["qlim"][0]))
                 row["qmax_edit"].setText(self.format_angle(m["qlim"][1]))
@@ -1791,42 +1776,90 @@ class ModularJointUI(object):
         except Exception as e:
             print("Apply structure error:", e)
 
-    def change_angle(self, idx, delta_rad):
+
+    def set_joint_angle_from_display(self, idx, shown_value):
         m = self.modules[idx]
         if m["fixed"] or m["type"] == "none":
             return
+
+        q = self.angle_from_display(shown_value)
         qmin, qmax = m["qlim"]
-        m["q"] = max(qmin, min(qmax, round(m["q"] + delta_rad, 6)))
+        m["q"] = clamp(q, qmin, qmax)
+
         self.refresh_control_row(idx)
         self.sync_world_target_to_current()
         self.plot_data()
 
+
+    def change_angle(self, idx, delta_rad):
+        m = self.modules[idx]
+        if m["fixed"] or m["type"] == "none":
+            return
+
+        qmin, qmax = m["qlim"]
+        m["q"] = clamp(round(m["q"] + delta_rad, 6), qmin, qmax)
+
+        self.refresh_control_row(idx)
+        self.sync_world_target_to_current()
+        self.plot_data()
+
+
+
     def refresh_control_row(self, idx):
         m = self.modules[idx]
         row = self.control_rows[idx]
+
         row["type_lbl"].setText(m["type"])
         row["axis_lbl"].setText(m["axis"].upper())
+
         row["servo_id_box"].blockSignals(True)
         row["servo_id_box"].setValue(int(m.get("servo_id", 0)))
         row["servo_id_box"].blockSignals(False)
 
+        angle_edit = row["angle_edit"]
+        angle_edit.blockSignals(True)
+
+        if self.unit_mode == "Degrees":
+            angle_edit.setDecimals(2)
+            angle_edit.setSingleStep(max(0.1, math.degrees(self.step_rad)))
+        else:
+            angle_edit.setDecimals(3)
+            angle_edit.setSingleStep(max(0.001, self.step_rad))
+
         if m["fixed"]:
-            row["angle_lbl"].setText("fixed")
+            angle_edit.setRange(0.0, 0.0)
+            angle_edit.setValue(0.0)
+            angle_edit.setEnabled(False)
             servo_deg = joint_to_servo_deg(m)
             row["aux_lbl"].setText("-" if servo_deg is None else f"{servo_deg:.1f}")
             row["down_btn"].setEnabled(False)
             row["up_btn"].setEnabled(False)
+
         elif m["type"] == "none":
-            row["angle_lbl"].setText("unused")
+            angle_edit.setRange(0.0, 0.0)
+            angle_edit.setValue(0.0)
+            angle_edit.setEnabled(False)
             row["aux_lbl"].setText("-")
             row["down_btn"].setEnabled(False)
             row["up_btn"].setEnabled(False)
+
         else:
-            row["angle_lbl"].setText(f"{self.angle_to_display(m['q']):.2f}")
+            qmin, qmax = m["qlim"]
+            shown_q = self.angle_to_display(m["q"])
+            shown_qmin = self.angle_to_display(qmin)
+            shown_qmax = self.angle_to_display(qmax)
+
+            angle_edit.setRange(min(shown_qmin, shown_qmax), max(shown_qmin, shown_qmax))
+            angle_edit.setValue(shown_q)
+            angle_edit.setEnabled(self.control_mode == "Joint")
+
             servo_deg = joint_to_servo_deg(m)
             row["aux_lbl"].setText("-" if servo_deg is None else f"{servo_deg:.1f}")
             row["down_btn"].setEnabled(self.control_mode == "Joint")
             row["up_btn"].setEnabled(self.control_mode == "Joint")
+
+        angle_edit.blockSignals(False)
+
 
     def refresh_all_control_rows(self):
         for i in range(len(self.modules)):
@@ -1848,7 +1881,6 @@ class ModularJointUI(object):
                     float(row["ly"].text()),
                     float(row["lz"].text())
                 ], dtype=float)
-                m["servo_offset_deg"] = 0.0 if m["fixed"] else float(row["servo_offset_edit"].text())
 
                 if m["type"] == "none":
                     m["q"] = 0.0
@@ -1864,14 +1896,17 @@ class ModularJointUI(object):
                     m["home_q"] = max(qmin, min(qmax, home_q))
                     m["q"] = max(qmin, min(qmax, m["q"]))
 
+                    if m["name"] in SERVO_CAL and "invert_box" in row:
+                        SERVO_CAL[m["name"]]["invert"] = bool(row["invert_box"].isChecked())
+
             self.refresh_all_control_rows()
             self.refresh_structure_fields()
             self.refresh_config_fields()
             self.sync_world_target_to_current()
-            self.view_needs_refit = True
             self.plot_data()
         except Exception as e:
             print("Apply geometry error:", e)
+
 
     def go_home(self):
         for m in self.modules:
