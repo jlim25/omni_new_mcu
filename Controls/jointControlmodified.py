@@ -22,8 +22,8 @@ DEFAULT_SPEED_PERCENT = 100
 MIN_MOVE_MS = 1000
 MAX_MOVE_MS = 30000
 
-WINDOW_W = 1450
-WINDOW_H = 860
+WINDOW_W = 1860
+WINDOW_H = 1000
 MAX_SERVO_ID = 254
 
 
@@ -994,7 +994,7 @@ class ModularJointUI(object):
         self.view_needs_refit = True
 
         win.setWindowTitle("OMNI Robot Arm Studio")
-        win.resize(WINDOW_W, WINDOW_H)
+        win.setFixedSize(WINDOW_W, WINDOW_H)
 
         central = QtWidgets.QWidget()
         win.setCentralWidget(central)
