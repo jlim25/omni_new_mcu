@@ -166,7 +166,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi, math.pi),
                 "fixed": False,
                 "servo_id": 1,
-                "servo_offset_deg": -37.8,
+                "servo_offset_deg": -56.8,
             },
             {
                 "name": "J2",
@@ -907,6 +907,13 @@ class ModularJointUI(object):
         self.structure_rows = []
         self.config_rows = []
         self.saved_poses = []
+        self.send_queue = []
+        self.send_timer = QtCore.QTimer()
+        self.send_timer.setSingleShot(True)
+        self.send_timer.timeout.connect(self.process_next_send)
+        self.send_in_progress = False
+        self.send_delay_ms = 1000
+
 
         self.uart_ready = False
         self.view_needs_refit = True
@@ -1076,7 +1083,30 @@ class ModularJointUI(object):
             self.speedDegLbl.setText(f"{self.get_speed_deg_per_sec():.1f} deg/s")
 
     def get_speed_deg_per_sec(self):
-        return MAX_SPEED_DEG_PER_SEC * float(self.speed_percent) / 100.0
+        percent = getattr(self, "speed_percent", DEFAULT_SPEED_PERCENT)
+        if percent is None:
+            percent = DEFAULT_SPEED_PERCENT
+        try:
+            percent = float(percent)
+        except Exception:
+            percent = DEFAULT_SPEED_PERCENT
+        percent = clamp(percent, 10.0, 100.0)
+        return MAX_SPEED_DEG_PER_SEC * percent / 100.0
+
+    def estimate_joint_move_time_ms(self, servo_id, target_deg):
+        speed_deg_per_sec = self.get_speed_deg_per_sec()
+        if speed_deg_per_sec is None or speed_deg_per_sec <= 0:
+            return DEFAULT_MOVE_MS
+
+        current_deg = self.current_servo_deg.get(int(servo_id), float(target_deg))
+        delta_deg = abs(float(target_deg) - float(current_deg))
+
+        if delta_deg < 0.1:
+            return MIN_MOVE_MS
+
+        move_ms = int(round((delta_deg / speed_deg_per_sec) * 1000.0))
+        return int(clamp(move_ms, MIN_MOVE_MS, MAX_MOVE_MS))
+
 
     def sync_servo_cache_to_model(self):
         self.current_servo_deg = {}
@@ -1418,6 +1448,11 @@ class ModularJointUI(object):
         self.sendBtn = QtWidgets.QPushButton("Send")
         self.sendBtn.clicked.connect(self.send)
         btn_row.addWidget(self.sendBtn)
+
+        self.cancelSendBtn = QtWidgets.QPushButton("Cancel Send")
+        self.cancelSendBtn.clicked.connect(self.cancel_queued_send)
+        self.cancelSendBtn.setEnabled(False)
+        btn_row.addWidget(self.cancelSendBtn)
 
         self.readBtn = QtWidgets.QPushButton("Read Angles")
         self.readBtn.clicked.connect(self.read_current_angles)
@@ -2033,6 +2068,91 @@ class ModularJointUI(object):
                 servo_ids.append(servo_id)
         return servo_ids
 
+    def queue_individual_sends(self):
+        self.send_queue = []
+
+        for i, m in enumerate(self.modules):
+            if m["fixed"] or m["type"] == "none":
+                continue
+
+            if i < len(self.control_rows):
+                row = self.control_rows[i]
+                if "select_box" in row and not row["select_box"].isChecked():
+                    continue
+
+            servo_id = int(m.get("servo_id", 0))
+            if not (1 <= servo_id <= MAX_SERVO_ID):
+                print(f"[WARN] Skipping {m['name']}: invalid servo_id={servo_id}")
+                continue
+
+            servo_deg = joint_to_servo_deg(m)
+            if servo_deg is None:
+                print(f"[WARN] Skipping {m['name']}: no servo calibration")
+                continue
+
+            pos = servo_deg_to_uart_count(m, servo_deg)
+            move_ms = self.estimate_joint_move_time_ms(servo_id, servo_deg)
+
+            self.send_queue.append({
+                "name": m["name"],
+                "servo_id": servo_id,
+                "servo_deg": float(servo_deg),
+                "pos": int(pos),
+                "move_ms": int(move_ms),
+            })
+
+    def process_next_send(self):
+        if not self.send_in_progress:
+            return
+
+        if not self.send_queue:
+            self.send_in_progress = False
+            if hasattr(self, "cancelSendBtn"):
+                self.cancelSendBtn.setEnabled(False)
+            self.canStatusLbl.setText("UART: queued send complete")
+            return
+
+        cmd = self.send_queue.pop(0)
+
+        try:
+            ServoControl.setBusServoMove(cmd["servo_id"], cmd["pos"], cmd["move_ms"])
+            self.current_servo_deg[cmd["servo_id"]] = cmd["servo_deg"]
+
+            print(
+                f"[SEND] {cmd['name']} id={cmd['servo_id']} angle={cmd['servo_deg']:.1f} deg "
+                f"pos={cmd['pos']} time={cmd['move_ms']} ms speed={self.get_speed_deg_per_sec():.1f} deg/s"
+            )
+
+            remaining = len(self.send_queue)
+            self.canStatusLbl.setText(
+                f"UART: sent {cmd['name']} (id {cmd['servo_id']}), {remaining} remaining"
+            )
+
+            if self.send_queue and self.send_in_progress:
+                self.send_timer.start(self.send_delay_ms)
+            else:
+                self.send_in_progress = False
+                if hasattr(self, "cancelSendBtn"):
+                    self.cancelSendBtn.setEnabled(False)
+                self.canStatusLbl.setText("UART: queued send complete")
+        except Exception as e:
+            self.send_timer.stop()
+            self.send_queue = []
+            self.send_in_progress = False
+            if hasattr(self, "cancelSendBtn"):
+                self.cancelSendBtn.setEnabled(False)
+            self.canStatusLbl.setText(f"UART: send failed ({e})")
+            print("Queued send error:", e)
+
+    def cancel_queued_send(self):
+        self.send_timer.stop()
+        remaining = len(self.send_queue)
+        self.send_queue = []
+        self.send_in_progress = False
+        if hasattr(self, "cancelSendBtn"):
+            self.cancelSendBtn.setEnabled(False)
+        self.canStatusLbl.setText(f"UART: queued send cancelled, {remaining} skipped")
+
     def send(self):
         try:
             if not self.uart_ready:
@@ -2040,53 +2160,34 @@ class ModularJointUI(object):
                 self.canStatusLbl.setText("UART: not ready")
                 return
 
-            sent = 0
+            if self.send_in_progress:
+                self.canStatusLbl.setText("UART: send already in progress")
+                return
 
-            for i, m in enumerate(self.modules):
-                if m["fixed"] or m["type"] == "none":
-                    continue
-                if not self.control_rows[i]["select_box"].isChecked():
-                    continue
+            self.queue_individual_sends()
 
-
-                servo_id = int(m.get("servo_id", 0))
-                if not (1 <= servo_id <= MAX_SERVO_ID):
-                    print(f"[WARN] Skipping {m['name']}: invalid servo_id={servo_id}")
-                    continue
-
-                servo_deg = joint_to_servo_deg(m)
-                if servo_deg is None:
-                    print(f"[WARN] Skipping {m['name']}: no servo calibration")
-                    continue
-
-                pos = servo_deg_to_uart_count(m, servo_deg)
-                move_ms = self.estimate_joint_move_time_ms(servo_id, servo_deg)
-
-                ServoControl.setBusServoMove(servo_id, pos, move_ms)
-                time.sleep(1.0)
-
-                self.current_servo_deg[servo_id] = float(servo_deg)
-                sent += 1
-
-                print(
-                    f"[SEND] {m['name']} id={servo_id} angle={servo_deg:.1f} deg "
-                    f"pos={pos} time={move_ms} ms speed={self.speed_percent}% "
-                    f"({self.get_speed_deg_per_sec():.1f} deg/s)"
-                
-                
-                )
-                
-            if sent == 0:
+            if not self.send_queue:
                 self.canStatusLbl.setText("UART: no valid servo commands")
                 return
 
+            self.send_in_progress = True
+            if hasattr(self, "cancelSendBtn"):
+                self.cancelSendBtn.setEnabled(True)
+
             self.canStatusLbl.setText(
-                f"UART: sent {sent} individual servo command(s) at {self.speed_percent}% "
-                f"({self.get_speed_deg_per_sec():.1f} deg/s)"
+                f"UART: queued {len(self.send_queue)} individual servo command(s)"
             )
+
+            self.process_next_send()
         except Exception as e:
+            self.send_timer.stop()
+            self.send_queue = []
+            self.send_in_progress = False
+            if hasattr(self, "cancelSendBtn"):
+                self.cancelSendBtn.setEnabled(False)
             self.canStatusLbl.setText(f"UART: send failed ({e})")
             print("Send error:", e)
+
 
 
     def read_current_angles(self):
