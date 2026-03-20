@@ -237,7 +237,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi, math.pi),
                 "fixed": False,
                 "servo_id": 1,
-                "servo_offset_deg": 0.0,
+                "servo_offset_deg": -37.8,
             },
             {
                 "name": "J2",
@@ -250,7 +250,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi / 2, math.pi / 2),
                 "fixed": False,
                 "servo_id": 2,
-                "servo_offset_deg": 0.0,
+                "servo_offset_deg": -12.72,
             },
             {
                 "name": "J3",
@@ -263,7 +263,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi / 2, math.pi / 2),
                 "fixed": False,
                 "servo_id": 4,
-                "servo_offset_deg": 0.0,
+                "servo_offset_deg": 5.52,
             },
             {
                 "name": "J4",
@@ -276,7 +276,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi / 2, math.pi / 2),
                 "fixed": False,
                 "servo_id": 6,
-                "servo_offset_deg": 0.0,
+                "servo_offset_deg": 30.7,
             },
             {
                 "name": "J5",
@@ -289,7 +289,7 @@ def make_default_modules(joint_count):
                 "qlim": (-math.pi, math.pi),
                 "fixed": False,
                 "servo_id": 5,
-                "servo_offset_deg": 0.0,
+                "servo_offset_deg": -160,
             },
             {
                 "name": "GRIP",
