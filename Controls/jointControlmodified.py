@@ -12,13 +12,13 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
-#import ServoControl
+import ServoControl
 
 
 DEFAULT_MOVE_MS = 1000
 MAX_SPEED_DEG_PER_SEC = 25.0
 DEFAULT_SPEED_PERCENT = 100
-MIN_MOVE_MS = 100
+MIN_MOVE_MS = 1000
 MAX_MOVE_MS = 30000
 
 WINDOW_W = 1450
@@ -1054,6 +1054,18 @@ class ModularJointUI(object):
             self.stepSpin.setValue(self.step_rad)
         self.stepSpin.blockSignals(False)
         self.stepUnitLbl.setText(self.angle_unit_short())
+    
+    def estimate_joint_move_time_ms(self, servo_id, target_deg):
+        speed_deg_per_sec = max(0.1, self.get_speed_deg_per_sec())
+        current_deg = self.current_servo_deg.get(int(servo_id), float(target_deg))
+        delta_deg = abs(float(target_deg) - float(current_deg))
+
+        if delta_deg < 0.1:
+            return MIN_MOVE_MS
+
+        move_ms = int(round((delta_deg / speed_deg_per_sec) * 1000.0))
+        return int(clamp(move_ms, MIN_MOVE_MS, MAX_MOVE_MS))
+
 
     def change_speed_percent(self, value):
         self.speed_percent = int(value)
@@ -2028,14 +2040,14 @@ class ModularJointUI(object):
                 self.canStatusLbl.setText("UART: not ready")
                 return
 
-            move_ms = self.estimate_move_time_ms()
-            servo_packets = []
             sent = 0
-            sent_targets = []
 
-            for m in self.modules:
+            for i, m in enumerate(self.modules):
                 if m["fixed"] or m["type"] == "none":
                     continue
+                if not self.control_rows[i]["select_box"].isChecked():
+                    continue
+
 
                 servo_id = int(m.get("servo_id", 0))
                 if not (1 <= servo_id <= MAX_SERVO_ID):
@@ -2048,24 +2060,29 @@ class ModularJointUI(object):
                     continue
 
                 pos = servo_deg_to_uart_count(m, servo_deg)
-                servo_packets.extend([servo_id, pos])
-                sent_targets.append((servo_id, servo_deg, m["name"], pos))
-                sent += 1
-                print(f"[SEND] {m['name']} id={servo_id} angle={servo_deg:.1f} deg pos={pos} time={move_ms} ms")
+                move_ms = self.estimate_joint_move_time_ms(servo_id, servo_deg)
 
-            if sent == 1:
-                ServoControl.setBusServoMove(servo_packets[0], servo_packets[1], move_ms)
-            elif sent > 1:
-                ServoControl.setMoreBusServoMove(servo_packets, sent, move_ms)
-            else:
+                ServoControl.setBusServoMove(servo_id, pos, move_ms)
+                time.sleep(1.0)
+
+                self.current_servo_deg[servo_id] = float(servo_deg)
+                sent += 1
+
+                print(
+                    f"[SEND] {m['name']} id={servo_id} angle={servo_deg:.1f} deg "
+                    f"pos={pos} time={move_ms} ms speed={self.speed_percent}% "
+                    f"({self.get_speed_deg_per_sec():.1f} deg/s)"
+                
+                
+                )
+                
+            if sent == 0:
                 self.canStatusLbl.setText("UART: no valid servo commands")
                 return
 
-            for servo_id, servo_deg, _, _ in sent_targets:
-                self.current_servo_deg[servo_id] = float(servo_deg)
-
             self.canStatusLbl.setText(
-                f"UART: sent {sent} servo command(s) at {self.speed_percent}% ({self.get_speed_deg_per_sec():.1f} deg/s), {move_ms} ms"
+                f"UART: sent {sent} individual servo command(s) at {self.speed_percent}% "
+                f"({self.get_speed_deg_per_sec():.1f} deg/s)"
             )
         except Exception as e:
             self.canStatusLbl.setText(f"UART: send failed ({e})")
