@@ -1,0 +1,298 @@
+{
+  "Default": {
+    "joint_count": 5,
+    "modules": [
+      {
+        "name": "J1",
+        "type": "swivel",
+        "axis": "z",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.2032
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "fixed": false,
+        "servo_id": 1,
+        "servo_offset_deg": -56.8,
+        "invert": false,
+        "gear_ratio": 2.0
+      },
+      {
+        "name": "J2",
+        "type": "rotation",
+        "axis": "y",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.1524
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -1.5707963267948966,
+          1.5707963267948966
+        ],
+        "fixed": false,
+        "servo_id": 2,
+        "servo_offset_deg": -12.72,
+        "invert": true,
+        "gear_ratio": 1.0
+      },
+      {
+        "name": "J3",
+        "type": "rotation",
+        "axis": "y",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.1016
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -1.5707963267948966,
+          1.5707963267948966
+        ],
+        "fixed": false,
+        "servo_id": 4,
+        "servo_offset_deg": 5.52,
+        "invert": false,
+        "gear_ratio": 1.0
+      },
+      {
+        "name": "J4",
+        "type": "rotation",
+        "axis": "y",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.1016
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -1.5707963267948966,
+          1.5707963267948966
+        ],
+        "fixed": false,
+        "servo_id": 6,
+        "servo_offset_deg": 30.7,
+        "invert": true,
+        "gear_ratio": 1.0
+      },
+      {
+        "name": "J5",
+        "type": "swivel",
+        "axis": "y",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "fixed": false,
+        "servo_id": 5,
+        "servo_offset_deg": -160.0,
+        "invert": true,
+        "gear_ratio": 1.0
+      },
+      {
+        "name": "GRIP",
+        "type": "swivel",
+        "axis": "z",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "fixed": true,
+        "servo_id": 0,
+        "servo_offset_deg": 0.0,
+        "invert": false,
+        "gear_ratio": 1.0
+      }
+    ]
+  },
+  "Alt Config": {
+    "joint_count": 4,
+    "modules": [
+      {
+        "name": "J1",
+        "type": "swivel",
+        "axis": "z",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.2032
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "fixed": false,
+        "servo_id": 1,
+        "servo_offset_deg": 0.0,
+        "invert": false,
+        "gear_ratio": 2.0
+      },
+      {
+        "name": "J2",
+        "type": "rotation",
+        "axis": "y",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.2032
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -1.5707963267948966,
+          1.5707963267948966
+        ],
+        "fixed": false,
+        "servo_id": 2,
+        "servo_offset_deg": 0.0,
+        "invert": true,
+        "gear_ratio": 1.0
+      },
+      {
+        "name": "J3",
+        "type": "rotation",
+        "axis": "y",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.1524
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -1.5707963267948966,
+          1.5707963267948966
+        ],
+        "fixed": false,
+        "servo_id": 4,
+        "servo_offset_deg": 0.0,
+        "invert": false,
+        "gear_ratio": 1.0
+      },
+      {
+        "name": "J4",
+        "type": "swivel",
+        "axis": "z",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "fixed": false,
+        "servo_id": 6,
+        "servo_offset_deg": 0.0,
+        "invert": true,
+        "gear_ratio": 1.0
+      },
+      {
+        "name": "GRIP",
+        "type": "swivel",
+        "axis": "z",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "link": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "q": 0.0,
+        "home_q": 0.0,
+        "qlim": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "fixed": true,
+        "servo_id": 0,
+        "servo_offset_deg": 0.0,
+        "invert": false,
+        "gear_ratio": 1.0
+      }
+    ]
+  }
+}

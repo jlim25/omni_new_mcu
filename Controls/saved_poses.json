@@ -1,0 +1,84 @@
+[
+  {
+    "name": "Pose 1",
+    "joints": [
+      {
+        "name": "J1",
+        "q": 0.0,
+        "servo_id": 1,
+        "servo_offset_deg": -56.8
+      },
+      {
+        "name": "J2",
+        "q": 0.0,
+        "servo_id": 2,
+        "servo_offset_deg": -12.72
+      },
+      {
+        "name": "J3",
+        "q": 0.0,
+        "servo_id": 4,
+        "servo_offset_deg": 5.52
+      },
+      {
+        "name": "J4",
+        "q": 0.0,
+        "servo_id": 6,
+        "servo_offset_deg": 30.7
+      },
+      {
+        "name": "J5",
+        "q": 0.0,
+        "servo_id": 5,
+        "servo_offset_deg": -160.0
+      },
+      {
+        "name": "GRIP",
+        "q": 0.0,
+        "servo_id": 0,
+        "servo_offset_deg": 0.0
+      }
+    ]
+  },
+  {
+    "name": "Pose 2",
+    "joints": [
+      {
+        "name": "J1",
+        "q": 0.872664,
+        "servo_id": 1,
+        "servo_offset_deg": -56.8
+      },
+      {
+        "name": "J2",
+        "q": 0.43633,
+        "servo_id": 2,
+        "servo_offset_deg": -12.72
+      },
+      {
+        "name": "J3",
+        "q": 0.0,
+        "servo_id": 4,
+        "servo_offset_deg": 5.52
+      },
+      {
+        "name": "J4",
+        "q": 0.0,
+        "servo_id": 6,
+        "servo_offset_deg": 30.7
+      },
+      {
+        "name": "J5",
+        "q": 0.0,
+        "servo_id": 5,
+        "servo_offset_deg": -160.0
+      },
+      {
+        "name": "GRIP",
+        "q": 0.0,
+        "servo_id": 0,
+        "servo_offset_deg": 0.0
+      }
+    ]
+  }
+]

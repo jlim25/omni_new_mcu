@@ -4,6 +4,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 import sys
 import os
 import math
+import json
 
 import numpy as np
 import matplotlib
@@ -12,7 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
-import ServoControl
+#import ServoControl
 
 
 DEFAULT_MOVE_MS = 1000
@@ -27,6 +28,9 @@ MAX_SERVO_ID = 254
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+POSES_JSON = os.path.join(BASE_DIR, "saved_poses.json")
+CONFIGS_JSON = os.path.join(BASE_DIR, "saved_configs.json")
+
 
 
 JOINT_TYPES = {
@@ -281,6 +285,76 @@ def make_default_modules(joint_count):
     })
 
     return modules
+
+def make_alt_modules():
+    return [
+        {
+            "name": "J1",
+            "type": "swivel",
+            "axis": "z",
+            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+            "link": np.array([0.0, 0.0, 0.2032], dtype=float),
+            "q": 0.0,
+            "home_q": 0.0,
+            "qlim": (-math.pi, math.pi),
+            "fixed": False,
+            "servo_id": 1,
+            "servo_offset_deg": 0.0,
+        },
+        {
+            "name": "J2",
+            "type": "rotation",
+            "axis": "y",
+            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+            "link": np.array([0.0, 0.0, 0.2032], dtype=float),
+            "q": 0.0,
+            "home_q": 0.0,
+            "qlim": (-math.pi / 2, math.pi / 2),
+            "fixed": False,
+            "servo_id": 2,
+            "servo_offset_deg": 0.0,
+        },
+        {
+            "name": "J3",
+            "type": "rotation",
+            "axis": "y",
+            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+            "link": np.array([0.0, 0.0, 0.1524], dtype=float),
+            "q": 0.0,
+            "home_q": 0.0,
+            "qlim": (-math.pi / 2, math.pi / 2),
+            "fixed": False,
+            "servo_id": 4,
+            "servo_offset_deg": 0.0,
+        },
+        {
+            "name": "J4",
+            "type": "swivel",
+            "axis": "z",
+            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+            "link": np.array([0.0, 0.0, 0.0], dtype=float),
+            "q": 0.0,
+            "home_q": 0.0,
+            "qlim": (-math.pi, math.pi),
+            "fixed": False,
+            "servo_id": 6,
+            "servo_offset_deg": 0.0,
+        },
+        {
+            "name": "GRIP",
+            "type": "swivel",
+            "axis": "z",
+            "offset": np.array([0.0, 0.0, 0.0], dtype=float),
+            "link": np.array([0.0, 0.0, 0.0], dtype=float),
+            "q": 0.0,
+            "home_q": 0.0,
+            "qlim": (-math.pi, math.pi),
+            "fixed": True,
+            "servo_id": 0,
+            "servo_offset_deg": 0.0,
+        }
+    ]
+
 
 
 def clamp(x, lo, hi):
@@ -907,6 +981,7 @@ class ModularJointUI(object):
         self.structure_rows = []
         self.config_rows = []
         self.saved_poses = []
+        self.saved_configs = {}
         self.send_queue = []
         self.send_timer = QtCore.QTimer()
         self.send_timer.setSingleShot(True)
@@ -978,6 +1053,17 @@ class ModularJointUI(object):
         self.controlModeBox.setCurrentText(self.control_mode)
         self.controlModeBox.currentTextChanged.connect(self.change_control_mode)
 
+        config_lbl = QtWidgets.QLabel("Robot config")
+        self.configProfileBox = QtWidgets.QComboBox()
+        self.loadConfigBtn = QtWidgets.QPushButton("Load Config")
+        self.saveConfigBtn = QtWidgets.QPushButton("Save Config")
+        self.overwriteConfigBtn = QtWidgets.QPushButton("Overwrite Config")
+
+        self.loadConfigBtn.clicked.connect(self.load_selected_configuration)
+        self.saveConfigBtn.clicked.connect(self.save_named_configuration)
+        self.overwriteConfigBtn.clicked.connect(self.overwrite_selected_configuration)
+
+
         self.stepUnitLbl = QtWidgets.QLabel()
         self.plotAxesCheck = QtWidgets.QCheckBox("Plot axes")
         self.plotAxesCheck.setChecked(True)
@@ -994,12 +1080,14 @@ class ModularJointUI(object):
             count_lbl, self.countSpin,
             unit_lbl, self.unitBox,
             step_lbl, self.stepSpin, self.stepUnitLbl,
-            speed_lbl, self.speedSpin, self.speedPctLbl, self.speedDegLbl,
             preview_lbl, self.previewModeBox,
             mode_lbl, self.controlModeBox,
+            config_lbl, self.configProfileBox, self.loadConfigBtn, self.saveConfigBtn, self.overwriteConfigBtn,
             self.plotAxesCheck, self.frameAxesCheck, self.canStatusLbl
         ]:
             top_layout.addWidget(w)
+
+
 
 
         top_layout.addStretch()
@@ -1019,11 +1107,12 @@ class ModularJointUI(object):
 
         self.rebuild_tabs()
         self.refresh_step_spin()
-        self.refresh_speed_label()
-        self.sync_servo_cache_to_model()
+        self.load_configs_from_file()
+        self.load_poses_from_file()
         self.sync_world_target_to_current()
         self.init_uart()
         self.plot_data()
+
 
 
     def init_uart(self):
@@ -1145,6 +1234,168 @@ class ModularJointUI(object):
 
         move_ms = int(round((max_delta_deg / speed_deg_per_sec) * 1000.0))
         return int(clamp(move_ms, MIN_MOVE_MS, MAX_MOVE_MS))
+    def modules_to_json_data(self, modules):
+        out = []
+        for m in modules:
+            out.append({
+                "name": m["name"],
+                "type": m["type"],
+                "axis": m["axis"],
+                "offset": [float(v) for v in m["offset"]],
+                "link": [float(v) for v in m["link"]],
+                "q": float(m["q"]),
+                "home_q": float(m["home_q"]),
+                "qlim": [float(m["qlim"][0]), float(m["qlim"][1])],
+                "fixed": bool(m["fixed"]),
+                "servo_id": int(m.get("servo_id", 0)),
+                "servo_offset_deg": float(m.get("servo_offset_deg", 0.0)),
+                "invert": bool(SERVO_CAL.get(m["name"], {}).get("invert", False)),
+                "gear_ratio": float(SERVO_CAL.get(m["name"], {}).get("gear_ratio", 1.0)),
+            })
+        return out
+
+    def json_data_to_modules(self, data):
+        modules = []
+        for m in data:
+            modules.append({
+                "name": m["name"],
+                "type": m["type"],
+                "axis": m["axis"],
+                "offset": np.array(m["offset"], dtype=float),
+                "link": np.array(m["link"], dtype=float),
+                "q": float(m["q"]),
+                "home_q": float(m["home_q"]),
+                "qlim": (float(m["qlim"][0]), float(m["qlim"][1])),
+                "fixed": bool(m["fixed"]),
+                "servo_id": int(m.get("servo_id", 0)),
+                "servo_offset_deg": float(m.get("servo_offset_deg", 0.0)),
+            })
+            if m["name"] in SERVO_CAL:
+                if "invert" in m:
+                    SERVO_CAL[m["name"]]["invert"] = bool(m["invert"])
+                if "gear_ratio" in m:
+                    SERVO_CAL[m["name"]]["gear_ratio"] = float(m["gear_ratio"])
+        return modules
+
+    def export_current_configuration(self):
+        return {
+            "joint_count": int(self.joint_count),
+            "modules": self.modules_to_json_data(self.modules),
+        }
+
+    def load_configuration_data(self, config):
+        self.joint_count = int(config["joint_count"])
+        self.modules = self.json_data_to_modules(config["modules"])
+
+        self.countSpin.blockSignals(True)
+        self.countSpin.setValue(self.joint_count)
+        self.countSpin.blockSignals(False)
+
+        self.rebuild_tabs()
+        if hasattr(self, "sync_servo_cache_to_model"):
+            self.sync_servo_cache_to_model()
+        self.sync_world_target_to_current()
+        self.view_needs_refit = True
+        self.plot_data()
+
+    def built_in_config_profiles(self):
+        return {
+            "Default": {
+                "joint_count": len([m for m in make_default_modules(5) if m["name"].startswith("J")]),
+                "modules": self.modules_to_json_data(make_default_modules(5)),
+            },
+            "Alt Config": {
+                "joint_count": len([m for m in make_alt_modules() if m["name"].startswith("J")]),
+                "modules": self.modules_to_json_data(make_alt_modules()),
+            },
+        }
+
+    def save_configs_to_file(self):
+        try:
+            with open(CONFIGS_JSON, "w", encoding="utf-8") as f:
+                json.dump(self.saved_configs, f, indent=2)
+        except Exception as e:
+            print("Save configs JSON error:", e)
+
+    def load_configs_from_file(self):
+        self.saved_configs = self.built_in_config_profiles()
+
+        if os.path.exists(CONFIGS_JSON):
+            try:
+                with open(CONFIGS_JSON, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self.saved_configs.update(data)
+            except Exception as e:
+                print("Load configs JSON error:", e)
+
+        self.refresh_config_profile_list()
+
+    def refresh_config_profile_list(self):
+        if not hasattr(self, "configProfileBox"):
+            return
+        current = self.configProfileBox.currentText()
+        self.configProfileBox.blockSignals(True)
+        self.configProfileBox.clear()
+        self.configProfileBox.addItems(list(self.saved_configs.keys()))
+        idx = self.configProfileBox.findText(current)
+        if idx >= 0:
+            self.configProfileBox.setCurrentIndex(idx)
+        elif self.configProfileBox.count() > 0:
+            self.configProfileBox.setCurrentIndex(0)
+        self.configProfileBox.blockSignals(False)
+
+    def save_named_configuration(self):
+        name, ok = QtWidgets.QInputDialog.getText(self.window, "Save Configuration", "Configuration name:")
+        if not ok or not name.strip():
+            self.canStatusLbl.setText("Config: save cancelled")
+            return
+        name = name.strip()
+        self.saved_configs[name] = self.export_current_configuration()
+        self.save_configs_to_file()
+        self.refresh_config_profile_list()
+        self.configProfileBox.setCurrentText(name)
+        self.canStatusLbl.setText(f"Config: saved '{name}'")
+
+    def overwrite_selected_configuration(self):
+        name = self.configProfileBox.currentText().strip()
+        if not name:
+            self.canStatusLbl.setText("Config: no configuration selected")
+            return
+        self.saved_configs[name] = self.export_current_configuration()
+        self.save_configs_to_file()
+        self.refresh_config_profile_list()
+        self.configProfileBox.setCurrentText(name)
+        self.canStatusLbl.setText(f"Config: updated '{name}'")
+
+    def load_selected_configuration(self):
+        name = self.configProfileBox.currentText().strip()
+        if not name or name not in self.saved_configs:
+            self.canStatusLbl.setText("Config: invalid selection")
+            return
+        self.load_configuration_data(self.saved_configs[name])
+        self.refresh_config_profile_list()
+        self.configProfileBox.setCurrentText(name)
+        self.canStatusLbl.setText(f"Config: loaded '{name}'")
+
+    def save_poses_to_file(self):
+        try:
+            with open(POSES_JSON, "w", encoding="utf-8") as f:
+                json.dump(self.saved_poses, f, indent=2)
+        except Exception as e:
+            print("Save poses JSON error:", e)
+
+    def load_poses_from_file(self):
+        self.saved_poses = []
+        if os.path.exists(POSES_JSON):
+            try:
+                with open(POSES_JSON, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self.saved_poses = data
+            except Exception as e:
+                print("Load poses JSON error:", e)
+        self.refresh_pose_list()
 
 
     def toggle_plot_axes(self, checked):
@@ -2287,7 +2538,9 @@ class ModularJointUI(object):
             })
         self.saved_poses.append(pose)
         self.refresh_pose_list()
+        self.save_poses_to_file()
         self.canStatusLbl.setText(f"Saved {pose['name']}")
+
 
     def refresh_pose_list(self):
         if not hasattr(self, "poseList"):
@@ -2337,7 +2590,9 @@ class ModularJointUI(object):
 
         self.refresh_pose_list()
         self.poseList.setCurrentRow(row)
+        self.save_poses_to_file()
         self.canStatusLbl.setText(f"Updated {pose['name']}")
+
 
     def delete_selected_pose(self):
         row = self.poseList.currentRow()
@@ -2347,8 +2602,12 @@ class ModularJointUI(object):
 
         name = self.saved_poses[row]["name"]
         del self.saved_poses[row]
+        name = self.saved_poses[row]["name"]
+        del self.saved_poses[row]
         self.refresh_pose_list()
+        self.save_poses_to_file()
         self.canStatusLbl.setText(f"Deleted {name}")
+
 
     def plot_data(self):
         try:
